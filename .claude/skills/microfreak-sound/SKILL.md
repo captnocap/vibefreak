@@ -52,8 +52,12 @@ longer to set up because the matrix is driven through the encoder like a hand wo
 2. Pick one or two oscillator types from the guide, then use `freak find` to land on a starting setting.
 3. Render with `freak play`, read the numbers, adjust one thing at a time. Three to six renders is normal.
    Check more than one note if the sound will be played across the keyboard.
-4. Answer with: the "On the panel" block, one or two sentences on why those settings give that sound, and the
-   path of the WAV so the person can listen before touching the hardware.
+4. Render the version you are handing over with `--name short_name --about "one sentence on what it is meant
+   to be"`. Every render shows up by itself on the listening page, http://rack.local:8770/ (over the VPN:
+   http://10.0.0.4:8770/), with both recordings playable, the panel settings and the harmonics. Use a new
+   `--name` for each candidate worth hearing; the default name `last` is overwritten by the next render.
+5. Answer with: the "On the panel" block, one or two sentences on why those settings give that sound, and the
+   link `http://rack.local:8770/#short_name` so the person can listen before touching the hardware.
 
 ## Honesty rules
 

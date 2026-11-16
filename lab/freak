@@ -3,6 +3,7 @@
 
   freak engines                         oscillator types and what their three knobs are called
   freak play engine=SawX wave=30 ...    set a patch, play a note, record and measure it
+                                        (--name idea1 --about "what it is meant to be": shown on the listening page)
   freak analyze FILE --note C3          measure any recording
   freak find --word hollow --engine V.Analog --where "centroid_harm<3"
   freak match FILE --note C3            measured oscillator settings that sound closest to a recording
@@ -119,34 +120,66 @@ def cmd_play(args):
                    wav=base + ".wav", raw_wav=base + ".osc.wav")
     osc = analyze.analyze_file(base + ".osc.wav", hz, args.hold, oscillator_only=True)
     out = analyze.analyze_file(base + ".wav", hz, args.hold)
+    if any(k in back["matrix"] for k in ("lfo>pitch", "cyc_env>pitch")):
+        # a moving pitch smears every harmonic across the spectrum, which the pitched-or-noisy
+        # measure would read as noise: withdraw that figure rather than report it
+        for f in (osc, out):
+            if not f.get("silent"):
+                f["words"] = [w for w in f.get("words", []) if "noise" not in w] + ["pitch moves while held"]
+                f["harmonic_share"] = None
     result = {"patch": back, "screen": shown, "note": args.note, "note_hz": round(hz, 2),
               "oscillator": osc, "output": out,
               "files": {"output": base + ".wav", "oscillator_only": base + ".osc.wav"}}
+    panel = [f"Type: {back['engine']}"]
+    for knob in ("wave", "timbre", "shape"):
+        s = shown[knob]
+        panel.append(f"{s['label']}: {s['shown'] if s['shown'] is not None else str(back[knob]) + '%'}")
+    panel.append(f"Filter: {str(back['filter']).upper()}   Amp Mod: {'on' if back['amp_mod'] else 'off'}"
+                 f"   Paraphonic: {'on' if back['paraphonic'] else 'off'}")
+    for knob in ("cutoff", "resonance", "attack", "decay", "sustain", "filter_amount"):
+        panel.append(kb.knob_text(knob, back[knob]))
+    if back["cyc_amount"] > 0.5:
+        for knob in ("cyc_rise", "cyc_fall", "cyc_hold", "cyc_amount"):
+            panel.append(kb.knob_text(knob, back[knob]))
+    if back["glide"] > 0.5:
+        panel.append(f"Glide: {back['glide']:.0f}% of the knob ({kb.clock(back['glide'])})")
+    panel += [line.strip() for line in modulation_lines(back, fields)]
+    env = {k: out.get(k) for k in ("attack_ms", "decay_half_ms", "sustain_ratio", "release_ms") if out.get(k) is not None}
+    result["panel"] = panel
+    save_card(base, args, fields, panel, hz, osc, out, env)
     if args.json:
         print(json.dumps(result))
         return
     print("On the panel:")
-    print(f"  Type: {back['engine']}")
-    for knob in ("wave", "timbre", "shape"):
-        s = shown[knob]
-        print(f"  {s['label']}: {s['shown'] if s['shown'] is not None else str(back[knob]) + '%'}")
-    print(f"  Filter: {str(back['filter']).upper()}   Amp Mod: {'on' if back['amp_mod'] else 'off'}"
-          f"   Paraphonic: {'on' if back['paraphonic'] else 'off'}")
-    for knob in ("cutoff", "resonance", "attack", "decay", "sustain", "filter_amount"):
-        print("  " + kb.knob_text(knob, back[knob]))
-    if back["cyc_amount"] > 0.5:
-        for knob in ("cyc_rise", "cyc_fall", "cyc_hold", "cyc_amount"):
-            print("  " + kb.knob_text(knob, back[knob]))
-    if back["glide"] > 0.5:
-        print(f"  Glide: {back['glide']:.0f}% of the knob ({kb.clock(back['glide'])})")
-    for line in modulation_lines(back, fields):
-        print(line)
+    for line in panel:
+        print("  " + line)
     print(f"Note {args.note} ({hz:.1f} Hz), held {args.hold} ms")
     print("Oscillator (exact):  " + analyze.summary(osc))
     print("After filter + amp (filter is a model): " + analyze.summary(out))
-    env = {k: out.get(k) for k in ("attack_ms", "decay_half_ms", "sustain_ratio", "release_ms") if out.get(k) is not None}
     print(f"Loudness over time: {env}")
     print(f"Files: {base}.wav  {base}.osc.wav")
+    print(f"Listen: http://rack.local:8770/#{args.name}  (the listening page, if its service is running)")
+
+
+def save_card(base, args, fields, panel, hz, osc, out, env):
+    """Write what the listening page shows beside a render: the panel settings and the headline measurements."""
+    import datetime
+
+    def brief(f):
+        if f.get("silent"):
+            return {"silent": True}
+        return {"words": f.get("words", []), "harmonics_db": [round(v, 1) for v in f.get("harmonics_db", [])[:16]],
+                "centroid_harm": f.get("centroid_harm"), "centroid_hz": f.get("centroid_hz"),
+                "harmonic_share": f.get("harmonic_share"), "odd_even_db": f.get("odd_even_db"),
+                "level_db": f.get("level_db"), "summary": analyze.summary(f)}
+
+    card = {"name": args.name, "made": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
+            "about": args.about or "", "note": str(args.note), "note_hz": round(hz, 2),
+            "hold_ms": args.hold, "release_ms": args.release, "velocity": args.velocity,
+            "asked": " ".join(args.fields), "panel": panel,
+            "oscillator": brief(osc), "output": brief(out), "loudness": env}
+    with open(base + ".json", "w") as fh:
+        json.dump(card, fh, indent=1)
 
 
 def cmd_analyze(args):
@@ -290,6 +323,7 @@ def main():
     p.add_argument("--release", type=float, default=500)
     p.add_argument("--velocity", type=int, default=100)
     p.add_argument("--name", default="last")
+    p.add_argument("--about", help="a sentence on what this sound is meant to be; shown on the listening page")
     p.add_argument("--json", action="store_true")
     p.set_defaults(fn=cmd_play)
     for name, fn in (("analyze", cmd_analyze), ("match", cmd_match)):
