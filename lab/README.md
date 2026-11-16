@@ -22,6 +22,8 @@ Nothing here contains Arturia's firmware. You supply the firmware update file yo
 | `lab/freaklab/sweep.py`, `modsweep.py`, `calibrate.py` | The measurement runs that fill `lab/kb/`. |
 | `lab/freaklab/kb.py` | Search the knowledge base; write `kb/GUIDE.md`. |
 | `lab/freaklab/score.py`, `lab/pieces/` | Whole pieces: each part is played through on its own patch, as you would multitrack the real instrument, and the takes are mixed to a 48 kHz stereo file (`lab/freak piece NAME`). A piece is a Python file in `lab/pieces/` whose `build()` returns the parts, their patches and their notes. `claudes_sonnet.py` is the first. |
+| `lab/freaklab/instruments.py` | The instruments pieces are built from: patches that have been played and measured, by the job they do (`lab/freak instruments`, and `--check` to measure them again). |
+| `lab/freaklab/compose.py` | Helpers for writing a piece: a clock in steps, note and chord names, parts. |
 | `lab/freak` | Command line for all of it (`lab/freak --help`). |
 | `lab/listen.py`, `lab/web/listen.html` | The listening page: every render in `lab/out/` playable in a browser, with its panel settings and harmonics. Runs as the user service `vibefreak-listen` on port 8770 (`lab/deploy/vibefreak-listen.service`); home network and VPN ranges only, read-only, no login. |
 | `lab/kb/` | The knowledge base: one JSON per oscillator type, the filter, the envelope, modulation, the panel calibration, and the generated `GUIDE.md`. |
@@ -66,12 +68,17 @@ Tempo after fix 1 was checked two ways (`kb/modulation.json`): a synced LFO at 1
 tempo on the screen within 0.1 % at five tempos from 30 to 240 BPM, and the arpeggiator plays exactly two
 notes per beat at the same five.
 
+The skill `microfreak-compose` (in `.claude/skills`) takes a mood or theme and has a coding agent write,
+check and render a piece with these, ending on the listening page.
+
 Two things about the emulator to know when scripting modulation:
 
 - Once a matrix point modulates a knob, the firmware's parameter table holds the moving value, not the knob
   position. `freak play` reads the patch back before it sets the matrix for that reason.
 - A freshly started emulator shows Key/Arp Mode as Linear but hands out a random value per note until the
   setting has been changed once. `patch.apply` sets it (Random, then Linear) whenever a Key/Arp point is used.
+- The Modal oscillator type gives nothing on the first note after it is selected. A single `freak play`
+  and every take of a piece play one throwaway note first (`panel.SWALLOWS_FIRST_NOTE`).
 
 ## Lab protocol (for scripting without Python)
 

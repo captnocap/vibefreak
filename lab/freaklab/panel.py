@@ -2,6 +2,9 @@
 from . import kb, matrix, patch
 
 
+SWALLOWS_FIRST_NOTE = {"Modal"}
+
+
 def modulation_lines(back, fields):
     """The modulation part of a patch, said the way it is set on the panel."""
     lines = []
@@ -62,4 +65,11 @@ def set_and_describe(lab, fields):
     shown = patch.osc_display(lab)
     patch.apply(lab, {k: v for k, v in fields.items() if patch.is_point(k)})
     back["matrix"] = matrix.amounts(lab)
+    if back["engine"] in SWALLOWS_FIRST_NOTE:
+        # in the emulator this oscillator type gives nothing on the first note after it is
+        # selected, so one note is played and left to die before anything is recorded
+        lab.note_on(60, 100)
+        lab.step(80)
+        lab.note_off(60)
+        lab.step(2500)
     return back, shown, describe(back, shown, fields)

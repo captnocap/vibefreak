@@ -5,6 +5,7 @@
   freak play engine=SawX wave=30 ...    set a patch, play a note, record and measure it
                                         (--name idea1 --about "what it is meant to be": shown on the listening page)
   freak piece claudes_sonnet            play a whole multi-part piece from lab/pieces/ and mix it
+  freak instruments [--check]           the measured instruments pieces are built from
   freak analyze FILE --note C3          measure any recording
   freak find --word hollow --engine V.Analog --where "centroid_harm<3"
   freak match FILE --note C3            measured oscillator settings that sound closest to a recording
@@ -197,6 +198,24 @@ def cmd_piece(args):
         piece = importlib.import_module("pieces." + args.name).build()
     except ModuleNotFoundError:
         sys.exit(f"no piece lab/pieces/{args.name}.py")
+    if piece["name"] != args.name:
+        sys.exit(f"the piece calls itself '{piece['name']}' but the file is {args.name}.py: make them the same")
+    errors, warnings, summary = score.lint(piece)
+    print("\n".join(summary))
+    for w in warnings:
+        print("warning: " + w)
+    for e in errors:
+        print("ERROR: " + e)
+    if errors:
+        sys.exit(1)
+    if not warnings:
+        print("no warnings")
+    if args.check:
+        if piece.get("structure"):
+            print("Structure, as the listening page will show it:")
+            for line in piece["structure"]:
+                print("  " + line)
+        return
     os.makedirs(OUT, exist_ok=True)
     try:
         wav, takes, card = score.render_piece(piece, OUT, args.jobs)
@@ -204,10 +223,44 @@ def cmd_piece(args):
         sys.exit(str(e))
     print(f"{card['title']}: {card['seconds']} s, {len(card['tracks'])} parts")
     for t in card["tracks"]:
-        print(f"  {t['name']:10s} {t['notes']:4d} notes, level {t['level_db']} dB  ({t['role']})")
+        print(f"  {t['name']:12s} {t['notes']:4d} notes, {t['level_db']} dB while sounding  ({t['role']})")
     print("Tuning of the held notes (cents):", json.dumps(score.check_tuning(piece, takes)))
+    curve = score.loudness_curve(wav)
+    print("Loudness of the mix through the piece (start time: dB):")
+    print("  " + "  ".join(f"{int(t) // 60}:{int(t) % 60:02d}: {db:.0f}" for t, db in curve))
+    levels = score.part_levels(piece, takes)
+    step = card["seconds"] / 8
+    print("Each part's level in the mix, in eighths of the piece (dB; . is silent). Compare down a column for balance:")
+    print("  " + " " * 12 + "".join(f"{int(i * step) // 60}:{int(i * step) % 60:02d}".rjust(6) for i in range(8)))
+    for name, row in levels.items():
+        print(f"  {name:12s}" + "".join(("." if v is None else str(v)).rjust(6) for v in row))
     print(f"File: {wav}")
     print(f"Listen: http://rack.local:8770/#{piece['name']}")
+
+
+def cmd_instruments(args):
+    from freaklab import instruments
+    if not args.check:
+        for name, inst in instruments.INSTRUMENTS.items():
+            lo, hi = inst["range"]
+            print(f"{name:12s} {inst['role']:8s} notes {lo}-{hi}  {inst['sounds']}")
+        return
+    bad = 0
+    for name, note, m in instruments.check(args.names or None, args.jobs):
+        role = instruments.INSTRUMENTS[name]["role"]
+        flag = ""
+        if m.get("error") or m.get("silent"):
+            flag = "  <-- NO SOUND" if m.get("silent") else "  <-- " + m["error"]
+        elif m["peak_db"] < -36:
+            flag = "  <-- very quiet"
+        elif role not in ("drum", "texture"):
+            # vibrato and detuned stacks smear the reading, so they get more room
+            loose = any(k in instruments.INSTRUMENTS[name]["fields"] for k in ("lfo>pitch",)) or role == "pad"
+            if m["cents"] is None or abs(m["cents"]) > (20 if loose else 8):
+                flag = "  <-- out of tune"
+        bad += bool(flag)
+        print(f"{name:12s} note {note:3d}  " + "  ".join(f"{k}={v}" for k, v in m.items()) + flag)
+    sys.exit(1 if bad else 0)
 
 
 def cmd_selftest(args):
@@ -324,8 +377,14 @@ def main():
     p.add_argument("--engine", action="append")
     p.add_argument("--jobs", type=int, default=12)
     p.set_defaults(fn=cmd_sweep)
+    p = sub.add_parser("instruments")
+    p.add_argument("names", nargs="*")
+    p.add_argument("--check", action="store_true", help="play each one across its range and measure it")
+    p.add_argument("--jobs", type=int, default=12)
+    p.set_defaults(fn=cmd_instruments)
     p = sub.add_parser("piece")
     p.add_argument("name", help="a file in lab/pieces/, without .py")
+    p.add_argument("--check", action="store_true", help="look the score over without rendering it")
     p.add_argument("--jobs", type=int, default=8)
     p.set_defaults(fn=cmd_piece)
     sub.add_parser("selftest").set_defaults(fn=cmd_selftest)
