@@ -21,6 +21,7 @@ Nothing here contains Arturia's firmware. You supply the firmware update file yo
 | `lab/freaklab/analyze.py` | The measurements: harmonics, brightness, noise, movement, envelope. |
 | `lab/freaklab/sweep.py`, `modsweep.py`, `calibrate.py` | The measurement runs that fill `lab/kb/`. |
 | `lab/freaklab/kb.py` | Search the knowledge base; write `kb/GUIDE.md`. |
+| `lab/freaklab/score.py`, `lab/pieces/` | Whole pieces: each part is played through on its own patch, as you would multitrack the real instrument, and the takes are mixed to a 48 kHz stereo file (`lab/freak piece NAME`). A piece is a Python file in `lab/pieces/` whose `build()` returns the parts, their patches and their notes. `claudes_sonnet.py` is the first. |
 | `lab/freak` | Command line for all of it (`lab/freak --help`). |
 | `lab/listen.py`, `lab/web/listen.html` | The listening page: every render in `lab/out/` playable in a browser, with its panel settings and harmonics. Runs as the user service `vibefreak-listen` on port 8770 (`lab/deploy/vibefreak-listen.service`); home network and VPN ranges only, read-only, no login. |
 | `lab/kb/` | The knowledge base: one JSON per oscillator type, the filter, the envelope, modulation, the panel calibration, and the generated `GUIDE.md`. |

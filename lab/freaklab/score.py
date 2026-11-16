@@ -1,0 +1,203 @@
+"""Plays whole pieces: several one-voice tracks, each its own patch, mixed to stereo.
+
+The MicroFreak plays one patch at a time, so a piece is made the way it would
+be with the real instrument and a recorder: each part is played through on its
+own patch, start to finish, and the takes are laid over each other. Every note
+of every take comes out of the emulated instrument; the mix adds only level,
+left-right placement and, if asked, a room reverb (which is not the synth, and
+is said so on the listening page).
+
+A piece is a dict:
+  {"name", "title", "about", "structure": [lines of text], "reverb_db": -17 or None,
+   "tracks": [{"name", "role", "fields": patch fields, "gain_db", "pan" (-1..1),
+               "events": [(start_ms, length_ms, midi_note, velocity), ...]}]}
+"""
+import datetime
+import json
+import os
+import tempfile
+import wave
+from multiprocessing import Pool
+
+import numpy as np
+
+from . import panel, patch
+from .client import Lab
+
+SR_IN = 96000
+SR_OUT = 48000
+GAP_MS = 12  # a held note is let go this long before the next one, so each note starts its envelope
+
+
+def _read(path):
+    with wave.open(path, "rb") as w:
+        return np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16)
+
+
+def render_track(job):
+    """One take: set the patch, play the events in time, return the recording as float samples at 96 kHz."""
+    track, total_ms = job
+    events = sorted(track["events"])
+    actions = []
+    for i, (start, length, note, vel) in enumerate(events):
+        end = start + length
+        if i + 1 < len(events):
+            end = min(end, events[i + 1][0] - GAP_MS)
+        if end <= start:
+            raise ValueError(f"{track['name']}: note at {start} ms has no room before the next one")
+        actions.append((start, 1, note, vel))
+        actions.append((end, 0, note, 0))
+    actions.sort(key=lambda a: (a[0], a[1]))  # at the same instant, let go before striking
+    tmp = tempfile.mkdtemp(prefix="freakscore")
+    seg = os.path.join(tmp, "seg.wav")
+    chunks, pos = [], 0
+    with Lab() as lab:
+        patch.apply(lab, patch.INIT)
+        back, _shown, lines = panel.set_and_describe(lab, track["fields"])
+        lab.step(400)
+
+        def advance(to_ms):
+            nonlocal pos
+            target = round(to_ms * SR_IN / 1000)
+            if target - pos >= 32:
+                lab.render((target - pos) * 1000 / SR_IN, wav=seg)
+                data = _read(seg)
+                chunks.append(data)
+                pos += len(data)
+
+        for t, on, note, vel in actions:
+            advance(t)
+            if on:
+                lab.note_on(note, vel)
+            else:
+                lab.note_off(note)
+        advance(total_ms)
+    os.remove(seg)
+    os.rmdir(tmp)
+    audio = np.concatenate(chunks).astype(np.float32) / 32768.0
+    return track["name"], audio, lines
+
+
+def _fft_convolve(x, h):
+    n = len(x) + len(h) - 1
+    size = 1 << (n - 1).bit_length()
+    return np.fft.irfft(np.fft.rfft(x, size) * np.fft.rfft(h, size), size)[:n]
+
+
+def _halve(x):
+    """96 kHz to 48 kHz: low-pass below 22 kHz, then keep every second sample."""
+    taps = 255
+    n = np.arange(taps) - (taps - 1) / 2
+    h = 0.46 * np.sinc(0.46 * n) * np.blackman(taps)
+    h /= h.sum()
+    y = _fft_convolve(x, h)[(taps - 1) // 2:(taps - 1) // 2 + len(x)]
+    return y[::2]
+
+
+def _room(seconds=2.2, decay=0.33, seed=7):
+    """A plain room: two channels of noise dying away, darker as it goes. Not a model of any real space."""
+    rng = np.random.default_rng(seed)
+    n = int(seconds * SR_OUT)
+    t = np.arange(n) / SR_OUT
+    out = []
+    for _ in range(2):
+        noise = rng.standard_normal(n)
+        # one-pole low-pass by cumulative blend, which takes the fizz off the tail
+        k = np.exp(-2 * np.pi * 3500 / SR_OUT)
+        spec = np.fft.rfft(noise)
+        f = np.fft.rfftfreq(n, 1 / SR_OUT)
+        spec *= (1 - k) / np.abs(1 - k * np.exp(-2j * np.pi * f / SR_OUT))
+        tail = np.fft.irfft(spec, n) * np.exp(-t / decay)
+        tail[: int(0.018 * SR_OUT)] = 0  # a short gap before the room answers
+        out.append(tail / np.sqrt(np.sum(tail ** 2)))
+    return out
+
+
+def mix(piece, takes):
+    """Lay the takes over each other in stereo at 48 kHz. Returns (left, right, per-track levels in dB)."""
+    left = right = None
+    levels = {}
+    for track in piece["tracks"]:
+        x = _halve(takes[track["name"]])
+        peak = float(np.max(np.abs(x))) or 1.0
+        x = x / peak * 10 ** (track.get("gain_db", 0) / 20)
+        levels[track["name"]] = round(float(10 * np.log10(np.mean(x ** 2) + 1e-12)), 1)
+        angle = (track.get("pan", 0) + 1) * np.pi / 4  # equal power
+        l, r = x * np.cos(angle), x * np.sin(angle)
+        left = l if left is None else left + l
+        right = r if right is None else right + r
+    wet = piece.get("reverb_db")
+    if wet is not None:
+        ir_l, ir_r = _room()
+        mono = (left + right) / 2
+        g = 10 ** (wet / 20)
+        n = len(left) + int(1.2 * SR_OUT)
+        pad = np.zeros(n - len(left))
+        left = np.concatenate([left, pad]) + g * _fft_convolve(mono, ir_l)[:n]
+        right = np.concatenate([right, pad]) + g * _fft_convolve(mono, ir_r)[:n]
+    peak = max(float(np.max(np.abs(left))), float(np.max(np.abs(right)))) or 1.0
+    scale = 10 ** (-1 / 20) / peak
+    return left * scale, right * scale, levels
+
+
+def render_piece(piece, out_dir, jobs=8):
+    total_ms = max(s + l for t in piece["tracks"] for s, l, _n, _v in t["events"]) + piece.get("tail_ms", 2500)
+    with Pool(min(jobs, len(piece["tracks"]))) as pool:
+        results = pool.map(render_track, [(t, total_ms) for t in piece["tracks"]])
+    shortest = min(len(audio) for _, audio, _ in results)  # takes can differ by one audio block
+    takes = {name: audio[:shortest] for name, audio, _ in results}
+    lines = {name: ln for name, _, ln in results}
+    left, right, levels = mix(piece, takes)
+    base = os.path.join(out_dir, piece["name"])
+    stereo = np.empty(2 * len(left), dtype=np.int16)
+    stereo[0::2] = np.clip(left * 32767, -32768, 32767).astype(np.int16)
+    stereo[1::2] = np.clip(right * 32767, -32768, 32767).astype(np.int16)
+    with wave.open(base + ".wav", "wb") as w:
+        w.setnchannels(2)
+        w.setsampwidth(2)
+        w.setframerate(SR_OUT)
+        w.writeframes(stereo.tobytes())
+    card = {
+        "kind": "piece", "name": piece["name"], "title": piece["title"], "about": piece.get("about", ""),
+        "made": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
+        "seconds": round(len(left) / SR_OUT, 1), "structure": piece.get("structure", []),
+        "mix": ("Each part is its own take on the emulated MicroFreak. The mix adds level and left-right placement"
+                + (f", and a plain room reverb at {piece['reverb_db']} dB, which is not the synth." if piece.get("reverb_db") is not None else ".")),
+        "tracks": [{"name": t["name"], "role": t.get("role", ""), "notes": len(t["events"]),
+                    "gain_db": t.get("gain_db", 0), "pan": t.get("pan", 0), "level_db": levels[t["name"]],
+                    "panel": lines[t["name"]]} for t in piece["tracks"]],
+    }
+    with open(base + ".json", "w") as fh:
+        json.dump(card, fh, indent=1)
+    return base + ".wav", takes, card
+
+
+def check_tuning(piece, takes, min_ms=450):
+    """Worst and average pitch error per track, in cents, over the notes long enough to measure."""
+    out = {}
+    for track in piece["tracks"]:
+        x = takes[track["name"]]
+        errs = []
+        events = sorted(track["events"])
+        for i, (start, length, note, _vel) in enumerate(events):
+            if i + 1 < len(events):
+                length = min(length, events[i + 1][0] - start)
+            if length < min_ms:
+                continue
+            a = int((start + 0.35 * length) * SR_IN / 1000)
+            b = int((start + 0.9 * length) * SR_IN / 1000)
+            seg = x[a:b]
+            if len(seg) < 4096 or float(np.max(np.abs(seg))) < 1e-3:
+                continue
+            size = 1 << 20
+            spec = np.abs(np.fft.rfft(seg * np.hanning(len(seg)), size))
+            want = 440.0 * 2 ** ((note - 69) / 12)
+            lo, hi = int(want * 2 ** (-0.9 / 12) * size / SR_IN), int(want * 2 ** (0.9 / 12) * size / SR_IN) + 1
+            k = lo + int(np.argmax(spec[lo:hi]))
+            if spec[k] < 0.02 * spec.max():
+                continue  # this note's own pitch is too weak in the sound to read
+            errs.append(1200 * np.log2(k * SR_IN / size / want))
+        if errs:
+            out[track["name"]] = {"notes_measured": len(errs), "mean_cents": round(float(np.mean(errs)), 1),
+                                  "worst_cents": round(float(max(errs, key=abs)), 1)}
+    return out

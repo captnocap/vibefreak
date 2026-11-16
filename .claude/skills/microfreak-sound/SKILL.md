@@ -25,6 +25,7 @@ lab/freak find --word hollow --where "centroid_harm<3" --engine V.Analog --sort 
 lab/freak play engine=SawX wave=30 timbre=70 shape=0 cutoff=55 resonance=20 --note C2 --name idea1
 lab/freak play engine=V.Analog cutoff=45 lfo:cutoff=10 lfo_shape=tri lfo_rate=60 env:pitch=-2 key_arp:cutoff=100
 lab/freak play engine=Harmo assign1=resonance cyc_env:assign1=30 cyc_mode=loop cyc_amount=100 cyc_rise=30
+lab/freak piece claudes_sonnet                  play a multi-part piece from lab/pieces/NAME.py and mix it
 lab/freak analyze some.wav --note C3            measure any 16-bit WAV
 lab/freak match some.wav --note C3              closest measured oscillator settings to a recording
 lab/freak knob cutoff 60                        what the screen reads at a knob position

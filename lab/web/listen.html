@@ -69,6 +69,12 @@
   .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
   .numbers { font-size: 13px; color: var(--soft); margin: 8px 0 0; }
   details { margin-top: 12px; font-size: 13px; color: var(--soft); }
+  details.part { margin-top: 0; padding: 7px 0; border-top: 1px solid var(--line); font-size: 14px; color: var(--ink); }
+  details.part:first-of-type { border-top: 0; }
+  details.part summary { cursor: pointer; color: var(--soft); }
+  details.part summary b { color: var(--ink); font-family: var(--mono); }
+  details.part ul.panel { margin: 6px 0 4px 14px; font-size: 13px; }
+  .card.piece .name { font-family: inherit; font-size: 24px; letter-spacing: -0.01em; }
   details code { font-family: var(--mono); font-size: 12px; word-break: break-word; color: var(--ink); }
   .plain { color: var(--soft); font-size: 14px; margin-top: 12px; }
   .empty { text-align: center; color: var(--soft); padding: 60px 10px; }
@@ -197,21 +203,30 @@ function build(r) {
   card.dataset.search = (r.name + " " + (c ? [c.about, c.asked, (c.panel || []).join(" "),
     ((c.output || {}).words || []).join(" ")].join(" ") : "")).toLowerCase();
 
+  const piece = c && c.kind === "piece";
+  if (piece) {
+    card.classList.add("piece");
+    card.dataset.search += " " + [c.title, (c.structure || []).join(" "),
+      (c.tracks || []).map(t => t.name + " " + t.role + " " + (t.panel || []).join(" ")).join(" ")].join(" ").toLowerCase();
+  }
   const head = el("div", "head");
   const h = el("h2", "name");
-  const link = el("a", "", r.name);
+  const link = el("a", "", piece ? c.title : r.name);
   link.href = "#" + r.name;
   h.appendChild(link);
   const meta = el("span", "meta");
   meta.dataset.mtime = r.mtime;
-  meta.dataset.fixed = (c ? "note " + c.note + " (" + c.note_hz + " Hz) · " : "") + r.seconds.toFixed(1) + " s · ";
+  const length = r.seconds >= 60 ? Math.floor(r.seconds / 60) + " min " + Math.round(r.seconds % 60) + " s" : r.seconds.toFixed(1) + " s";
+  meta.dataset.fixed = (piece ? "a piece in " + c.tracks.length + " parts · " :
+    c ? "note " + c.note + " (" + c.note_hz + " Hz) · " : "") + length + " · ";
   meta.textContent = meta.dataset.fixed + ago(r.mtime);
   head.append(h, meta);
   card.appendChild(head);
   if (c && c.about) card.appendChild(el("p", "about", c.about));
 
   const players = el("div", "players");
-  players.appendChild(player(r.name, r.name, "Full sound", "through the filter and amp", r.mtime));
+  players.appendChild(piece ? player(r.name, r.name, "The piece", "all parts mixed, stereo", r.mtime)
+                            : player(r.name, r.name, "Full sound", "through the filter and amp", r.mtime));
   if (r.oscillator_file) {
     players.appendChild(player(r.name, r.name + ".osc", "Oscillator only", "before the filter, exact", r.mtime));
   }
@@ -219,6 +234,29 @@ function build(r) {
 
   if (!c) {
     card.appendChild(el("p", "plain", "No settings were saved with this render (it was made before this page existed)."));
+    return card;
+  }
+  if (piece) {
+    const cols = el("div", "cols");
+    const left = el("div");
+    left.appendChild(el("h3", "", "How it is built"));
+    const ul = el("ul", "panel");
+    for (const line of c.structure || []) ul.appendChild(el("li", "", line));
+    left.appendChild(ul);
+    const right = el("div");
+    right.appendChild(el("h3", "", "The parts and their settings"));
+    for (const t of c.tracks || []) {
+      const d = el("details", "part");
+      const sum = el("summary");
+      sum.appendChild(el("b", "", t.name));
+      sum.appendChild(document.createTextNode(" · " + t.role + " · " + t.notes + " notes"));
+      d.appendChild(sum);
+      d.appendChild(panelList(t.panel || []));
+      right.appendChild(d);
+    }
+    cols.append(left, right);
+    card.appendChild(cols);
+    if (c.mix) card.appendChild(el("p", "plain", c.mix));
     return card;
   }
   const words = (c.output && c.output.words) || [];
