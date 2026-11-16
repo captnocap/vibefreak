@@ -1,6 +1,6 @@
 # The MicroFreak listening page: http://rack.local:8770/
 #
-# Install as a user service:
+# Install as a user service (%h is your home folder; the repo is expected at ~/code/vibefreak):
 #   cp lab/deploy/vibefreak-listen.service ~/.config/systemd/user/
 #   systemctl --user daemon-reload
 #   systemctl --user enable --now vibefreak-listen.service
@@ -9,8 +9,8 @@ Description=MicroFreak listening page (renders from the vibefreak lab, :8770)
 After=network.target
 
 [Service]
-WorkingDirectory=/home/siah/code/vibefreak/lab
-ExecStart=/usr/bin/python3 /home/siah/code/vibefreak/lab/listen.py --port 8770
+WorkingDirectory=%h/code/vibefreak/lab
+ExecStart=/usr/bin/python3 %h/code/vibefreak/lab/listen.py --port 8770
 Restart=on-failure
 RestartSec=3
 
