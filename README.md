@@ -24,7 +24,8 @@ Written in Rust, VibeFreak emulates the entire physical hardware architecture:
 This fork adds a measuring layer on top of the emulator, in [`lab/`](lab/README.md): set a patch in panel
 terms, play a note, record the oscillator and the full output, measure the sine waves it is made of, and keep
 the results in a knowledge base ([`lab/kb/GUIDE.md`](lab/kb/GUIDE.md)) that maps a wanted sound to settings on
-the real panel. `lab/freak --help` lists the commands; `.claude/skills/microfreak-sound` tells a coding agent
+the real panel. It covers the oscillator types, the envelopes, the modulation matrix, the LFO and the cycling
+envelope. `lab/freak --help` lists the commands; `.claude/skills/microfreak-sound` tells a coding agent
 how to use them.
 
 It also corrects the emulator's audio rate: the firmware runs its converter at 96 kHz, not 48 kHz (every note

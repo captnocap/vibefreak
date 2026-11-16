@@ -7,13 +7,20 @@
   freak find --word hollow --engine V.Analog --where "centroid_harm<3"
   freak match FILE --note C3            measured oscillator settings that sound closest to a recording
   freak knob cutoff 60                  what the screen shows with a knob at 60 %
-  freak sweep osc|filter|env|panel|all  rebuild the knowledge base (minutes)
+  freak sweep osc|filter|env|mod|panel|all  rebuild the knowledge base (minutes)
   freak guide                           regenerate kb/GUIDE.md from the measurements
   freak selftest                        check the emulator still behaves as the tools assume
 
 Patch fields for `play` (knobs are percent of travel, 0-100; filter_amount is -100..100):
   engine wave timbre shape cutoff resonance filter=lp|bp|hp attack decay sustain filter_amount
   amp_mod=on|off cyc_mode=env|run|loop cyc_rise cyc_fall cyc_hold cyc_amount glide paraphonic=on|off
+Modulation fields for `play`:
+  SOURCE:DEST=AMOUNT   a matrix point, -100..100, e.g. lfo:cutoff=12 env:pitch=-5 key_arp:cutoff=100
+                       sources cyc_env env lfo pressure key_arp; destinations pitch wave timbre cutoff assign1-3
+  assign1=resonance    what an Assign column points at (wave timbre shape cutoff resonance attack decay sustain
+                       cyc_rise cyc_fall cyc_hold cyc_amount glide lfo_rate)
+  lfo_shape=sine|tri|saw|square|random|glide  lfo_rate=0-100  lfo_sync=on|off  lfo_div=1/4  lfo_retrig=off|on|legato
+  press_mode=velocity|aftertouch  key_mode=linear|random
 Fields left out keep the plain starting patch. Add init=no to keep whatever the last patch was (same run only).
 """
 import argparse
@@ -23,7 +30,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from freaklab import analyze, engines, kb, patch  # noqa: E402
+from freaklab import analyze, engines, kb, matrix, patch  # noqa: E402
 from freaklab.client import Lab, note_hz, note_number  # noqa: E402
 
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "out")
@@ -36,13 +43,52 @@ def parse_fields(pairs):
             sys.exit(f"'{pair}' is not field=value")
         key, value = pair.split("=", 1)
         key = key.strip().lower()
-        if key in ("engine", "filter", "cyc_mode"):
-            fields[key] = value.strip() if key == "engine" else value.strip().lower()
-        elif key in ("amp_mod", "paraphonic"):
+        if ">" in key or ":" in key:
+            try:
+                fields[">".join(matrix.parse_point(key))] = float(value)
+            except (matrix.MatrixError, ValueError) as e:
+                sys.exit(str(e))
+        elif key in ("engine", "filter", "cyc_mode", "lfo_shape", "lfo_div", "lfo_retrig", "press_mode", "key_mode",
+                     "assign1", "assign2", "assign3"):
+            fields[key] = value.strip() if key in ("engine", "lfo_div") else value.strip().lower()
+        elif key in ("amp_mod", "paraphonic", "lfo_sync"):
             fields[key] = value.strip().lower() in ("on", "1", "true", "yes")
         else:
-            fields[key] = float(value)
+            try:
+                fields[key] = float(value)
+            except ValueError:
+                sys.exit(f"{key}={value}: expected a number")
     return fields
+
+
+def modulation_lines(back, fields):
+    """The modulation part of a patch, said the way it is set on the panel."""
+    lines = []
+    # Env > Cutoff is what the Filter Amount knob sets, and that knob is already listed
+    shown = {k: v for k, v in back["matrix"].items() if k != "env>cutoff" or "env>cutoff" in fields}
+    for point, amount in shown.items():
+        src, dst = point.split(">")
+        target = matrix.DEST_LABELS[dst]
+        if dst.startswith("assign"):
+            target += f" (= {back['assign'][dst]})"
+        lines.append(f"  Matrix: {matrix.SOURCE_LABELS[src]} > {target}  {amount:+.1f}")
+    used = {p.split(">")[0] for p in shown} | {p.split(">")[1] for p in shown}
+    for i in (1, 2, 3):
+        if f"assign{i}" in used and f"assign{i}" in fields:
+            lines.append(f"  Assign{i}: hold the Assign{i} button and move {back['assign'][f'assign{i}']}")
+    if "lfo" in used or any(k.startswith("lfo") for k in fields):
+        rate = (f"Sync on, division {back['lfo_div']}" if back["lfo_sync"] else
+                f"Sync off, {kb.lfo_rate_text(back['lfo_rate'])}")
+        lines.append(f"  LFO: shape {back['lfo_shape']}, {rate}"
+                     + (f", retrig {back['lfo_retrig']}" if back["lfo_retrig"] != "off" else ""))
+    if "cyc_env" in used and back["cyc_amount"] <= 0.5:
+        lines.append("  (CycEnv is routed but its Amount knob is at zero, so it does nothing)")
+    for field, item in patch.MENU_FIELDS.items():
+        if field in fields:
+            lines.append(f"  Utility > Preset > Modulations > {item}: {fields[field]}")
+    if "key_arp" in used and "key_mode" not in fields:
+        lines.append("  Utility > Preset > Modulations > Key/Arp Mode: Linear")
+    return lines
 
 
 def cmd_engines(args):
@@ -58,9 +104,17 @@ def cmd_play(args):
     hz = note_hz(args.note)
     with Lab() as lab:
         patch.apply(lab, patch.INIT)
-        patch.apply(lab, fields)
-        back = patch.read_back(lab)
-        shown = patch.osc_display(lab)
+        # Knobs first and read back while nothing modulates them: once the matrix is
+        # set, the firmware's table holds the moving values, not the knob positions.
+        still = {k: v for k, v in fields.items() if not patch.is_point(k)}
+        try:
+            patch.apply(lab, still)
+            back = patch.read_back(lab)
+            shown = patch.osc_display(lab)
+            patch.apply(lab, {k: v for k, v in fields.items() if patch.is_point(k)})
+        except patch.PatchError as e:
+            sys.exit(str(e))
+        back["matrix"] = patch.matrix.amounts(lab)
         patch.play(lab, args.note, args.hold, args.release, velocity=args.velocity,
                    wav=base + ".wav", raw_wav=base + ".osc.wav")
     osc = analyze.analyze_file(base + ".osc.wav", hz, args.hold, oscillator_only=True)
@@ -85,6 +139,8 @@ def cmd_play(args):
             print("  " + kb.knob_text(knob, back[knob]))
     if back["glide"] > 0.5:
         print(f"  Glide: {back['glide']:.0f}% of the knob ({kb.clock(back['glide'])})")
+    for line in modulation_lines(back, fields):
+        print(line)
     print(f"Note {args.note} ({hz:.1f} Hz), held {args.hold} ms")
     print("Oscillator (exact):  " + analyze.summary(osc))
     print("After filter + amp (filter is a model): " + analyze.summary(out))
@@ -145,6 +201,9 @@ def cmd_sweep(args):
         sweep.sweep_filter()
     if what in ("env", "all"):
         sweep.sweep_env()
+    if what in ("mod", "all"):
+        from freaklab import modsweep
+        modsweep.run()
 
 
 def cmd_selftest(args):
@@ -180,6 +239,36 @@ def cmd_selftest(args):
                 check(f"type {eng[0]} selects and the screen says so", title == eng[0], f"screen: {title}")
             except patch.PatchError as e:
                 check(f"type {eng[0]} selects", False, str(e))
+        # modulation: the matrix, an Assign column, the LFO and the menu
+        patch.apply(lab, patch.INIT)
+        try:
+            for point, amount in (("lfo>cutoff", 12.5), ("env>pitch", -25), ("key_arp>assign3", 100)):
+                got = matrix.set_amount(lab, *matrix.parse_point(point), amount)
+                check(f"matrix point {point} takes {amount}", abs(got - amount) < 0.15, f"firmware holds {got}")
+            check("matrix reads back as set", matrix.amounts(lab) == {"lfo>cutoff": 12.5, "env>pitch": -25.0, "key_arp>assign3": 100.0},
+                  str(matrix.amounts(lab)))
+            matrix.clear(lab)
+            check("matrix clears", matrix.amounts(lab) == {}, str(matrix.amounts(lab)))
+            for control in ("resonance", "shape", "cyc_rise"):
+                matrix.assign(lab, 1, control)
+                check(f"Assign1 points at {control}", matrix.assignments(lab)["assign1"] == control)
+            matrix.assign(lab, 1, "shape")
+            patch.apply(lab, {"lfo_shape": "square", "lfo_sync": True, "lfo_div": "1/8"})
+            back = patch.read_back(lab)
+            check("LFO shape, sync and division set", (back["lfo_shape"], back["lfo_sync"], back["lfo_div"]) == ("square", True, "1/8"),
+                  str((back["lfo_shape"], back["lfo_sync"], back["lfo_div"])))
+            patch.apply(lab, {"lfo_retrig": "on"})
+            check("Utility menu sets LFO Retrig", params.read(lab, "LFO.Retrig") == 16384)
+            patch.apply(lab, {"lfo_retrig": "off"})
+            # an envelope at full sustain on Pitch at 25 is one octave up
+            patch.apply(lab, patch.INIT)
+            patch.apply(lab, {"engine": "BasicWaves", "wave": 50, "timbre": 0, "shape": 0, "env>pitch": 25})
+            patch.play(lab, 57, 600, 0, raw_wav=tmp, cv_every=0)
+            f = analyze.analyze_file(tmp, 440.0, 600, oscillator_only=True)
+            check("Env > Pitch at 25 is one octave", abs(f.get("cents_off", 99)) < 8, f"{f.get('f0_hz')} Hz for A3 + 12")
+        except (patch.PatchError, matrix.MatrixError) as e:
+            check("modulation controls", False, str(e))
+        patch.apply(lab, patch.INIT)
         patch.apply(lab, {"engine": "BasicWaves", "wave": 50, "timbre": 0, "shape": 0})
         patch.play(lab, 69, 600, 0, raw_wav=tmp, cv_every=0)
     f = analyze.analyze_file(tmp, 440.0, 600, oscillator_only=True)
@@ -226,7 +315,7 @@ def main():
     p.add_argument("percent", type=float)
     p.set_defaults(fn=cmd_knob)
     p = sub.add_parser("sweep")
-    p.add_argument("what", choices=["osc", "filter", "env", "panel", "all"])
+    p.add_argument("what", choices=["osc", "filter", "env", "mod", "panel", "all"])
     p.add_argument("--engine", action="append")
     p.add_argument("--jobs", type=int, default=12)
     p.set_defaults(fn=cmd_sweep)

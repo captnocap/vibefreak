@@ -66,6 +66,121 @@ def knob_text(knob, percent):
     return f"{label}: {percent:.0f}% of the knob ({clock(percent)}){tail}"
 
 
+def lfo_rate_text(percent):
+    """The free-running LFO Rate knob at `percent`: what the screen reads and what was measured (nearest recorded)."""
+    mod = _load("modulation.json") or {}
+    rows = (mod.get("lfo") or {}).get("free_rate") or []
+    if not rows:
+        return f"Rate knob {percent:.0f}%"
+    r = min(rows, key=lambda r: abs(r["knob"] - percent))
+    near = "" if abs(r["knob"] - percent) < 1 else f" (nearest measured: {r['knob']}%)"
+    return f"Rate knob {percent:.0f}%{near}, screen reads about {r['shown']}, measured {r['measured_hz']} Hz"
+
+
+def _ms(v):
+    if v is None:
+        return "-"
+    return f"{v / 1000:.1f} s" if v >= 1000 else f"{v:.0f} ms"
+
+
+def _modulation_section(mod):
+    src, dst, lfo, cyc = mod["sources"], mod["destinations"], mod["lfo"], mod["cycling_envelope"]
+    pitch = {r[0]: r[2] for r in dst["pitch"]["rows"]}
+    cut = {r[0]: r[1] for r in dst["cutoff"]["rows"]}
+    wave = {r[0]: r[1] for r in dst["wave"]["rows"]}
+    lines = ["# Modulation matrix, LFO and cycling envelope", "",
+             "Measured on the firmware's own control signals and parameter values, so none of this depends on "
+             "the filter model. A matrix amount is the number on the Matrix Amount screen, -100 to 100; "
+             "one slow click of the Matrix encoder is 0.1, a fast turn moves much further.", "",
+             "## How far a matrix amount moves each destination", "",
+             "With a source at its full value (for example the envelope at full sustain):", "",
+             f"- **Pitch**: amount 100 = {pitch.get(100)} semitones, 50 = {pitch.get(50)}, 25 = {pitch.get(25)} (one octave), "
+             f"10 = {pitch.get(10)}, 5 = {pitch.get(5)}, 2 = {pitch.get(2)}, 1 = {pitch.get(1)}. "
+             "One semitone is an amount of about 2.1; a fifth is about 14.6.",
+             f"- **Cutoff**: amount 100 = the whole cutoff range ({mod['cutoff_octaves_full_range']} octaves); "
+             f"50 = {cut.get(50)} octaves, 25 = {cut.get(25)}, 10 = {cut.get(10)}. About 9.3 per octave.",
+             f"- **Wave, Timbre and anything on an Assign column**: the amount is percent of that knob's travel "
+             f"(amount 25 moved the knob value by {wave.get(25)} percent, 50 by {wave.get(50)}). "
+             "Checked on Shape and on Resonance through Assign1.",
+             "- The **Filter Amount knob is the Env > Cutoff point**: turning the knob writes that amount, and setting "
+             "the point in the matrix is the same thing.", "",
+             "## What each source puts out", "",
+             f"- **Env** (the main envelope): 0 at rest, {src['env_at_full_sustain']} at full sustain. Never negative.",
+             "- **CycEnv**: 0 up to the Amount knob's setting (knob at "
+             + ", ".join(f"{r['knob']}% = {r['top']}" for r in cyc["amount"]) + "). Never negative. "
+             "With the Cycling Envelope's Amount knob at zero, every CycEnv point does nothing.",
+             f"- **LFO**: swings both ways, {lfo['shapes']['sine']['min']} to {lfo['shapes']['sine']['max']}. "
+             "A point at amount A therefore moves the destination A up and A down.",
+             "- **Press**, with Utility > Preset > Modulations > Press Mode on Velocity (how a freshly started "
+             "emulator has it): how hard the note was struck, MIDI velocity "
+             + ", ".join(f"{v} = {x}" for v, x in src["velocity"]) + ". On Aftertouch: 0 until pressure arrives, MIDI "
+             "channel pressure " + ", ".join(f"{v} = {x}" for v, x in src["aftertouch_midi_channel_pressure"][1:])
+             + ". The emulated keybed does not report graded pressure, so the feel of the real touch plate is not measured.",
+             f"- **Key/Arp**, Key/Arp Mode on Linear: follows the note, 0 at C4 (MIDI 60), {src['key_linear_per_octave']:+} "
+             f"per octave up. Key > Cutoff at 100 moves the cutoff {src['key_cutoff_octaves_per_octave_at_100']} "
+             "octave per octave played, which is full keyboard tracking; 50 is half tracking.",
+             f"- **Key/Arp**, Key/Arp Mode on Random: a new value for every note, anywhere from {src['key_random']['min']} "
+             f"to {src['key_random']['max']} ({src['key_random']['distinct_values']} different values in "
+             f"{src['key_random']['same_note_repeats']} repeats of one note).", "",
+             "## LFO", "",
+             "Shape button, in the order it steps: " + ", ".join(lfo["shapes"]) + ".", ""]
+    for name, row in lfo["shapes"].items():
+        if "one_cycle" in row:
+            lines.append(f"- **{name}**, one cycle in 16 steps: " + " ".join(f"{v:+.1f}" for v in row["one_cycle"]))
+    rnd = lfo["shapes"].get("random", {})
+    lines += [f"- **random**: jumps to a new level once per LFO cycle (every {rnd.get('new_value_every_ms')} ms at the rate "
+              f"where the sine took {lfo['shapes']['sine'].get('period_ms')} ms).",
+              "- **glide**: the same random levels, slid between rather than jumped.", "",
+              "Rate knob with Sync off (percent of travel: screen / measured): "
+              + ", ".join(f"{r['knob']}%: {r['shown']} / {r['measured_hz']} Hz" for r in lfo["free_rate"])
+              + ". Between the ends the LFO runs about 5 % slower than the screen says.", ""]
+    synced = [r for r in lfo["synced"] if r.get("period_ms")]
+    if synced:
+        bpm = lfo.get("tempo_bpm")
+        lines += ["Rate with Sync on (a click on the LFO Rate encoder), slowest first: "
+                  + ", ".join(r["division"] for r in lfo["synced"]) + ".",
+                  (f"At {bpm} BPM one cycle took: " if bpm else "One cycle took: ")
+                  + ", ".join(f"{r['division']}: {_ms(r['period_ms'])}" for r in synced)
+                  + ". 1/4 is one beat, so 1/1 is a bar of four.", ""]
+    tempo = lfo.get("tempo") or []
+    if tempo:
+        lines += ["Tempo check (arpeggiator Rate screen, then the time of a 1/4 LFO cycle, which should be one beat): "
+                  + ", ".join(f"{r['shown']}: {_ms(r['quarter_ms'])} (a beat is {_ms(r['beat_ms'])})" for r in tempo) + ".", ""]
+    arp = (mod.get("arpeggiator") or {}).get("free_rate") or []
+    if arp:
+        lines += ["Arpeggiator with two keys held and its Rate free (screen: time between notes): "
+                  + ", ".join(f"{r['shown']}: {_ms(r['note_every_ms'])}" for r in arp)
+                  + ". It plays two notes per beat of the tempo shown. Only this clock was measured; patterns, the "
+                  "sequencer, Spice and Dice were not.", ""]
+    off, on = lfo.get("retrig_off_value_20ms_after_note"), lfo.get("retrig_on_value_20ms_after_note")
+    if off and on:
+        lines += ["LFO Retrig (Utility > Preset > Modulations): Off leaves the LFO running across notes (20 ms after eight "
+                  "notes it stood at " + ", ".join(str(v) for v in off) + "); On restarts it from the middle, going up, at "
+                  "every note (" + ", ".join(str(v) for v in on) + ").", ""]
+    lines += ["## Cycling envelope", "",
+              "Rise knob (percent: screen, then measured ms to half / to the top): "
+              + ", ".join(f"{r['knob']}%: {r['shown']}, {_ms(r['to_50pct_ms'])} / {_ms(r['to_99pct_ms'])}" for r in cyc["rise"])
+              + ". The rise is a straight line and the screen time is the whole rise.", "",
+              "Fall knob (percent: screen, then measured ms down to half / to a tenth / to nothing): "
+              + ", ".join(f"{r['knob']}%: {r['shown']}, {_ms(r['down_to_50pct_ms'])} / {_ms(r['down_to_10pct_ms'])} / {_ms(r['down_to_1pct_ms'])}"
+                          for r in cyc["fall"])
+              + ". The fall is a curve: it drops fast then tails off, half way down in about a sixth of the screen time.", "",
+              "Hold knob in **Env** mode is a sustain level (level still held after 2.5 s with a key down): "
+              + ", ".join(f"{r['knob']}% = {r['level_after_2500ms']}" for r in cyc["hold_env_mode"])
+              + ". At 0 it is a one-shot rise and fall.", "",
+              "Hold knob in **Loop** mode is time spent at the top (screen, then the whole cycle with Rise and Fall at "
+              f"{cyc['modes_measured_with']['shown']['cyc_rise']} each): "
+              + ", ".join(f"{r['knob']}%: {r['shown']}, cycle {_ms(r['cycle_ms'])}" for r in cyc["hold_loop_mode"]) + ".", ""]
+    m = cyc["modes"]
+    lines += ["Mode button:", "",
+              f"- **Env**: moves only while a key is down (no key: stays at {m['env']['no_key']['max']}); starts from zero at each note.",
+              f"- **Run**: cycles all the time, key or no key (every {_ms(m['run']['no_key']['repeats_every_ms'])} here, "
+              "which is Rise plus Fall), and a new note does not restart it. It is a second LFO that only goes up from zero.",
+              f"- **Loop**: each note restarts it from zero, and it then keeps cycling, key down or released "
+              f"(every {_ms(m['loop']['key_held']['repeats_every_ms'])} here).", ""]
+    return lines
+
+
 def osc_text(table, point):
     """An oscillator setting in the words and numbers the instrument's screen uses."""
     parts = []
@@ -226,6 +341,9 @@ def build_guide():
                   "Filter Amount with Cutoff at 40 % (knob: how far the envelope pushes the cutoff, in octaves): "
                   + ", ".join(f"{r['knob']:+d}: {r['sweep_octaves']:+.2f}" for r in env["filter_amount"])
                   + ". The sweep stops at the ends of the cutoff range, which is why the largest settings read the same.", ""]
+    mod = _load("modulation.json")
+    if mod:
+        lines += _modulation_section(mod)
     filt = _load("filter.json")
     if filt:
         lines += ["# Filter (a model, see the caveats at the top)", ""]

@@ -16,11 +16,13 @@ Nothing here contains Arturia's firmware. You supply the firmware update file yo
 | `lab/freaklab/params.py` | Where the firmware keeps the live patch in memory, so every setting can be read back. |
 | `lab/freaklab/ocr.py` | Reads the text off the emulated 128x64 display. |
 | `lab/freaklab/patch.py` | A patch in panel terms (knob percentages, button states): apply, read back, play. |
+| `lab/freaklab/matrix.py` | The modulation matrix and the Assign buttons, driven through the Matrix encoder and checked against firmware memory. |
+| `lab/freaklab/menu.py` | Utility > Preset > Modulations (LFO Retrig, Press Mode, Key/Arp Mode), walked by reading the menu off the screen. |
 | `lab/freaklab/analyze.py` | The measurements: harmonics, brightness, noise, movement, envelope. |
-| `lab/freaklab/sweep.py`, `calibrate.py` | The measurement runs that fill `lab/kb/`. |
+| `lab/freaklab/sweep.py`, `modsweep.py`, `calibrate.py` | The measurement runs that fill `lab/kb/`. |
 | `lab/freaklab/kb.py` | Search the knowledge base; write `kb/GUIDE.md`. |
 | `lab/freak` | Command line for all of it (`lab/freak --help`). |
-| `lab/kb/` | The knowledge base: one JSON per oscillator type, the filter, the envelope, the panel calibration, and the generated `GUIDE.md`. |
+| `lab/kb/` | The knowledge base: one JSON per oscillator type, the filter, the envelope, modulation, the panel calibration, and the generated `GUIDE.md`. |
 
 Needs Python 3 with numpy and Pillow, and the release build of `vibefreak-lab`
 (`cargo build --release -p vibefreak-lab`).
@@ -55,8 +57,19 @@ envelope timings in the knowledge base come from.
 ## Limits
 
 See the "How much to trust each part" section of `kb/GUIDE.md`. In short: oscillators exact, envelope timing
-exact, filter a model, sample-based types and anything needing the modulation matrix not measured yet.
-The effect of fix 1 on arpeggiator and sequencer tempo has not been checked separately.
+exact, envelope timing exact, modulation (matrix depths, LFO, cycling envelope) exact, filter a model;
+sample-based types, the vocoder, arpeggiator patterns, the sequencer and paraphonic mode not measured.
+
+Tempo after fix 1 was checked two ways (`kb/modulation.json`): a synced LFO at 1/4 takes one beat of the
+tempo on the screen within 0.1 % at five tempos from 30 to 240 BPM, and the arpeggiator plays exactly two
+notes per beat at the same five.
+
+Two things about the emulator to know when scripting modulation:
+
+- Once a matrix point modulates a knob, the firmware's parameter table holds the moving value, not the knob
+  position. `freak play` reads the patch back before it sets the matrix for that reason.
+- A freshly started emulator shows Key/Arp Mode as Linear but hands out a random value per note until the
+  setting has been changed once. `patch.apply` sets it (Random, then Linear) whenever a Key/Arp point is used.
 
 ## Lab protocol (for scripting without Python)
 

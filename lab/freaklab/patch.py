@@ -7,7 +7,7 @@ clicked until the firmware reports the wanted state. After applying, the
 firmware's own parameter table is read back and returned, so what a recording
 is labelled with is what the firmware actually held.
 """
-from . import engines, ocr, params
+from . import engines, matrix, menu, ocr, params
 
 # knob name -> (MIDI CC, firmware parameter, bipolar)
 KNOBS = {
@@ -34,7 +34,17 @@ BUTTONS = {
     "amp_mod": ("amp_mod", "EG2.Mode", {False: 0, True: 32767}),
     "cyc_mode": ("cyc_mode", "EG1.Mode", {"env": 0, "run": 16384, "loop": 32767}),
     "paraphonic": ("paraphonic", "Gen.Parafon", {False: 0, True: 32767}),
+    "lfo_shape": ("lfo_shape", "LFO.Shape", {"sine": 0, "tri": 6553, "saw": 13107, "square": 19660,
+                                             "random": 26214, "glide": 32767}),
+    "lfo_sync": ("lfo_rate", "LFO.Sync", {False: 0, True: 32767}),  # a click on the LFO Rate encoder
 }
+
+# LFO Rate positions when Sync is on, slowest first, as the screen names them.
+LFO_DIVS = ["8/1", "4/1", "2/1", "1/1", "1/2", "1/2T", "1/4", "1/4T", "1/8", "1/8T", "1/16", "1/16T", "1/32"]
+
+# Utility > Preset > Modulations entries, by patch field.
+MENU_FIELDS = {"lfo_retrig": "LFO Retrig", "press_mode": "Press Mode", "key_mode": "Key/Arp Mode"}
+ASSIGN_FIELDS = ("assign1", "assign2", "assign3")
 
 # A plain starting point: one oscillator straight through an open filter, organ-style envelope.
 INIT = {
@@ -44,6 +54,7 @@ INIT = {
     "attack": 0, "decay": 30, "sustain": 100, "filter_amount": 0, "amp_mod": True,
     "cyc_mode": "env", "cyc_rise": 20, "cyc_fall": 20, "cyc_hold": 0, "cyc_amount": 0,
     "glide": 0, "paraphonic": False,
+    "lfo_shape": "sine", "lfo_sync": False, "lfo_rate": 50, "matrix_clear": True,
 }
 
 
@@ -85,20 +96,72 @@ def set_button(lab, name, state):
     raise PatchError(f"could not set {name} to {state}")
 
 
+def is_point(field):
+    return ">" in field
+
+
+def set_lfo_div(lab, name):
+    wanted = [d.lower() for d in LFO_DIVS]
+    if str(name).lower() not in wanted:
+        raise PatchError(f"lfo_div is one of {LFO_DIVS}")
+    i = wanted.index(str(name).lower())
+    lab.cc(94, round((i + 0.5) * 127 / 13))  # the middle of that division's stretch of the control
+    lab.step(120)
+    if div_index(params.read(lab, "LFO.Div")) != i:
+        raise PatchError(f"could not set the LFO division to {name}")
+
+
+def div_index(stored):
+    """Which of the 13 divisions a stored LFO division value means."""
+    return min(12, stored * 13 // 32768)
+
+
 def apply(lab, patch):
-    """Set every control named in `patch` (anything missing is left alone)."""
-    unknown = set(patch) - set(KNOBS) - set(BUTTONS) - {"engine"}
+    """Set every control named in `patch` (anything missing is left alone).
+
+    Besides knobs and buttons a patch can hold modulation: matrix points as
+    'source>destination' (percent, -100..100), assign1-3 (the control each
+    Assign column points at), lfo_shape, lfo_sync, lfo_rate or lfo_div, and
+    the three menu settings lfo_retrig, press_mode and key_mode.
+    """
+    points = {k: v for k, v in patch.items() if is_point(k)}
+    known = set(KNOBS) | set(BUTTONS) | set(MENU_FIELDS) | set(ASSIGN_FIELDS) | {"engine", "lfo_div", "matrix_clear"}
+    unknown = set(patch) - known - set(points)
     if unknown:
         raise PatchError(f"unknown patch fields: {sorted(unknown)}")
+    try:
+        points = {matrix.parse_point(k): v for k, v in points.items()}
+    except matrix.MatrixError as e:
+        raise PatchError(str(e))
     if "engine" in patch:
         set_engine(lab, patch["engine"])
-    for name, (cc, _param, bipolar) in KNOBS.items():
-        if name in patch:
-            lab.cc(cc, knob_to_cc(patch[name], bipolar))
     for name in BUTTONS:
         if name in patch:
             set_button(lab, name, patch[name])
+    try:
+        if patch.get("matrix_clear"):
+            matrix.clear(lab)
+        for field, item in MENU_FIELDS.items():
+            if field in patch:
+                (menu.set_key_mode if field == "key_mode" else lambda l, v, item=item: menu.set_modulation_option(l, item, v))(lab, patch[field])
+        if "key_mode" not in patch and any(src == "key_arp" and v for (src, _d), v in points.items()):
+            menu.set_key_mode(lab, "linear")  # what a keyboard-tracking patch means; see menu.set_key_mode
+        for i, field in enumerate(ASSIGN_FIELDS):
+            if field in patch:
+                matrix.assign(lab, i + 1, patch[field])
+    except (matrix.MatrixError, menu.MenuError) as e:
+        raise PatchError(str(e))
+    for name, (cc, _param, bipolar) in KNOBS.items():
+        if name in patch:
+            lab.cc(cc, knob_to_cc(patch[name], bipolar))
+    if "lfo_div" in patch:
+        set_lfo_div(lab, patch["lfo_div"])
     lab.step(120)
+    try:
+        for (src, dst), value in points.items():
+            matrix.set_amount(lab, src, dst, value)
+    except matrix.MatrixError as e:
+        raise PatchError(str(e))
 
 
 def read_back(lab):
@@ -110,6 +173,10 @@ def read_back(lab):
         out[name] = stored_to_percent(raw[param], bipolar)
     for name, (_switch, param, states) in BUTTONS.items():
         out[name] = next((s for s, v in states.items() if v == raw[param]), raw[param])
+    out["lfo_div"] = LFO_DIVS[div_index(raw["LFO.Div"])]
+    out["lfo_retrig"] = {0: "off", 16384: "on", 32767: "legato"}.get(raw["LFO.Retrig"], raw["LFO.Retrig"])
+    out["matrix"] = matrix.amounts(lab)
+    out["assign"] = matrix.assignments(lab)
     return out
 
 

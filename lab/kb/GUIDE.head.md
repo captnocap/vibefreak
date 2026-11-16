@@ -17,10 +17,14 @@ screen words them, because the screen text was read off the emulated display.
   a textbook 2-pole state-variable filter. Its cutoff follows the frequency the firmware displays for each
   knob position; how sharp the resonance gets and how the real circuit overdrives are guesses. Use the filter
   numbers for direction (darker, brighter, more peak), not as exact values.
+- **Modulation matrix, LFO and cycling envelope: exact.** How far each amount moves each destination, what
+  each source puts out, LFO shapes and rates and cycling envelope times are read from the firmware's control
+  signals and parameter values. What a modulated *filter* then sounds like still goes through the filter model.
 - **Not covered:** Sample, Scan Grains, Cloud Grains and Hit Grains (they play Arturia's factory samples,
-  which are not in the firmware download), the Vocoder (needs a microphone), and everything that needs the
-  modulation matrix beyond the Filter Amount knob: LFO, cycling envelope routing, pressure, the arpeggiator
-  and sequencer, paraphonic mode. The lab can press those buttons but nothing has been measured.
+  which are not in the firmware download), the Vocoder (needs a microphone), arpeggiator patterns and the
+  sequencer (only the arpeggiator's clock was checked), paraphonic mode, the Rise and Fall shape settings of the
+  cycling envelope, and the graded pressure of the real touch keyboard. The lab can press those buttons but
+  nothing has been measured.
 - The emulator's built-in presets are placeholders written by its author, not Arturia's factory presets.
 
 ## The measures
@@ -51,7 +55,11 @@ All spectrum measures come from about 0.7 s of the held note, starting 120 ms in
    knob moves which measure.
 3. `lab/freak play ...` renders a candidate and measures it, including the filter and envelope. Listen to the
    WAV, compare numbers, adjust, repeat.
-4. Hand over the "On the panel" block from `freak play`: it is in the instrument's own terms.
+4. Movement is modulation: vibrato is LFO > Pitch at an amount of 0.5 to 2; a filter wobble is LFO > Cutoff
+   at 5 to 15; a pluck that opens the filter is the Filter Amount knob; a sound that brightens as you play
+   harder is Press > Cutoff with Press Mode on Velocity; a filter that follows the keyboard is Key/Arp > Cutoff
+   at 100. The modulation section below has the scales.
+5. Hand over the "On the panel" block from `freak play`: it is in the instrument's own terms.
 
 Knob percentages are of the knob's travel: 0 is hard left (7 o'clock), 50 is straight up, 100 is hard right
 (5 o'clock). Wave, Timbre and Shape are endless encoders, so use the screen value for those.

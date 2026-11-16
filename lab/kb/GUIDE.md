@@ -17,10 +17,14 @@ screen words them, because the screen text was read off the emulated display.
   a textbook 2-pole state-variable filter. Its cutoff follows the frequency the firmware displays for each
   knob position; how sharp the resonance gets and how the real circuit overdrives are guesses. Use the filter
   numbers for direction (darker, brighter, more peak), not as exact values.
+- **Modulation matrix, LFO and cycling envelope: exact.** How far each amount moves each destination, what
+  each source puts out, LFO shapes and rates and cycling envelope times are read from the firmware's control
+  signals and parameter values. What a modulated *filter* then sounds like still goes through the filter model.
 - **Not covered:** Sample, Scan Grains, Cloud Grains and Hit Grains (they play Arturia's factory samples,
-  which are not in the firmware download), the Vocoder (needs a microphone), and everything that needs the
-  modulation matrix beyond the Filter Amount knob: LFO, cycling envelope routing, pressure, the arpeggiator
-  and sequencer, paraphonic mode. The lab can press those buttons but nothing has been measured.
+  which are not in the firmware download), the Vocoder (needs a microphone), arpeggiator patterns and the
+  sequencer (only the arpeggiator's clock was checked), paraphonic mode, the Rise and Fall shape settings of the
+  cycling envelope, and the graded pressure of the real touch keyboard. The lab can press those buttons but
+  nothing has been measured.
 - The emulator's built-in presets are placeholders written by its author, not Arturia's factory presets.
 
 ## The measures
@@ -51,7 +55,11 @@ All spectrum measures come from about 0.7 s of the held note, starting 120 ms in
    knob moves which measure.
 3. `lab/freak play ...` renders a candidate and measures it, including the filter and envelope. Listen to the
    WAV, compare numbers, adjust, repeat.
-4. Hand over the "On the panel" block from `freak play`: it is in the instrument's own terms.
+4. Movement is modulation: vibrato is LFO > Pitch at an amount of 0.5 to 2; a filter wobble is LFO > Cutoff
+   at 5 to 15; a pluck that opens the filter is the Filter Amount knob; a sound that brightens as you play
+   harder is Press > Cutoff with Press Mode on Velocity; a filter that follows the keyboard is Key/Arp > Cutoff
+   at 100. The modulation section below has the scales.
+5. Hand over the "On the panel" block from `freak play`: it is in the instrument's own terms.
 
 Knob percentages are of the knob's travel: 0 is hard left (7 o'clock), 50 is straight up, 100 is hard right
 (5 o'clock). Wave, Timbre and Shape are endless encoders, so use the screen value for those.
@@ -81,6 +89,66 @@ Release after a held note (same knob; ms down to 50 % / 10 %): 0: 1.3 / 4.3, 10:
 Sustain (knob: held level as a fraction of the peak): 0: 0.0, 25: 0.286, 50: 0.527, 75: 0.76, 100: 1.0.
 
 Filter Amount with Cutoff at 40 % (knob: how far the envelope pushes the cutoff, in octaves): -100: -4.30, -50: -4.30, +0: +0.00, +25: +2.78, +50: +5.48, +75: +6.41, +100: +6.41. The sweep stops at the ends of the cutoff range, which is why the largest settings read the same.
+
+# Modulation matrix, LFO and cycling envelope
+
+Measured on the firmware's own control signals and parameter values, so none of this depends on the filter model. A matrix amount is the number on the Matrix Amount screen, -100 to 100; one slow click of the Matrix encoder is 0.1, a fast turn moves much further.
+
+## How far a matrix amount moves each destination
+
+With a source at its full value (for example the envelope at full sustain):
+
+- **Pitch**: amount 100 = 48.0 semitones, 50 = 24.0, 25 = 12.0 (one octave), 10 = 4.78, 5 = 2.39, 2 = 0.94, 1 = 0.47. One semitone is an amount of about 2.1; a fifth is about 14.6.
+- **Cutoff**: amount 100 = the whole cutoff range (10.71 octaves); 50 = 5.31 octaves, 25 = 2.68, 10 = 1.07. About 9.3 per octave.
+- **Wave, Timbre and anything on an Assign column**: the amount is percent of that knob's travel (amount 25 moved the knob value by 25.4 percent, 50 by 50.0). Checked on Shape and on Resonance through Assign1.
+- The **Filter Amount knob is the Env > Cutoff point**: turning the knob writes that amount, and setting the point in the matrix is the same thing.
+
+## What each source puts out
+
+- **Env** (the main envelope): 0 at rest, 0.996 at full sustain. Never negative.
+- **CycEnv**: 0 up to the Amount knob's setting (knob at 0% = 0.0, 25% = 0.251, 50% = 0.502, 75% = 0.745, 100% = 0.996). Never negative. With the Cycling Envelope's Amount knob at zero, every CycEnv point does nothing.
+- **LFO**: swings both ways, -0.996 to 0.996. A point at amount A therefore moves the destination A up and A down.
+- **Press**, with Utility > Preset > Modulations > Press Mode on Velocity (how a freshly started emulator has it): how hard the note was struck, MIDI velocity 1 = 0.008, 16 = 0.125, 32 = 0.249, 64 = 0.498, 96 = 0.747, 127 = 0.988. On Aftertouch: 0 until pressure arrives, MIDI channel pressure 32 = 0.249, 64 = 0.498, 127 = 0.988. The emulated keybed does not report graded pressure, so the feel of the real touch plate is not measured.
+- **Key/Arp**, Key/Arp Mode on Linear: follows the note, 0 at C4 (MIDI 60), +0.0934 per octave up. Key > Cutoff at 100 moves the cutoff 1.0 octave per octave played, which is full keyboard tracking; 50 is half tracking.
+- **Key/Arp**, Key/Arp Mode on Random: a new value for every note, anywhere from -0.932 to 0.916 (40 different values in 40 repeats of one note).
+
+## LFO
+
+Shape button, in the order it steps: sine, tri, saw, square, random, glide.
+
+- **sine**, one cycle in 16 steps: -0.0 +0.4 +0.7 +0.9 +1.0 +0.9 +0.8 +0.4 +0.0 -0.4 -0.7 -0.9 -1.0 -0.9 -0.8 -0.4
+- **tri**, one cycle in 16 steps: -0.0 +0.2 +0.5 +0.7 +1.0 +0.8 +0.5 +0.2 +0.0 -0.2 -0.5 -0.7 -1.0 -0.8 -0.5 -0.2
+- **saw**, one cycle in 16 steps: -0.0 +0.1 +0.2 +0.4 +0.5 +0.6 +0.7 +0.9 +1.0 -0.9 -0.8 -0.6 -0.5 -0.4 -0.2 -0.1
+- **square**, one cycle in 16 steps: -1.0 +1.0 +1.0 +1.0 +1.0 +1.0 +1.0 +1.0 +1.0 -1.0 -1.0 -1.0 -1.0 -1.0 -1.0 -1.0
+- **random**: jumps to a new level once per LFO cycle (every 211.1 ms at the rate where the sine took 211.0 ms).
+- **glide**: the same random levels, slid between rather than jumped.
+
+Rate knob with Sync off (percent of travel: screen / measured): 0%: 0.06Hz / 0.062 Hz, 10%: 0.12Hz / 0.121 Hz, 20%: 0.25Hz / 0.236 Hz, 30%: 0.52Hz / 0.499 Hz, 40%: 1.13Hz / 1.071 Hz, 50%: 2.45Hz / 2.317 Hz, 60%: 5.02Hz / 4.739 Hz, 70%: 10.93Hz / 10.299 Hz, 80%: 23.78Hz / 22.409 Hz, 90%: 48.75Hz / 45.936 Hz, 100%: 100.00Hz / 99.978 Hz. Between the ends the LFO runs about 5 % slower than the screen says.
+
+Rate with Sync on (a click on the LFO Rate encoder), slowest first: 8/1, 4/1, 2/1, 1/1, 1/2, 1/2T, 1/4, 1/4T, 1/8, 1/8T, 1/16, 1/16T, 1/32.
+At 239.9 BPM one cycle took: 8/1: 8.0 s, 4/1: 4.0 s, 2/1: 2.0 s, 1/1: 1.0 s, 1/2: 501 ms, 1/2T: 334 ms, 1/4: 250 ms, 1/4T: 167 ms, 1/8: 125 ms, 1/8T: 83 ms, 1/16: 63 ms, 1/16T: 42 ms, 1/32: 31 ms. 1/4 is one beat, so 1/1 is a bar of four.
+
+Tempo check (arpeggiator Rate screen, then the time of a 1/4 LFO cycle, which should be one beat): 30.0bpm: 2.0 s (a beat is 2.0 s), 76.4bpm: 786 ms (a beat is 785 ms), 122.8bpm: 489 ms (a beat is 489 ms), 186.5bpm: 322 ms (a beat is 322 ms), 239.9bpm: 250 ms (a beat is 250 ms).
+
+Arpeggiator with two keys held and its Rate free (screen: time between notes): 30.0bpm: 1.0 s, 76.4bpm: 392 ms, 122.8bpm: 244 ms, 186.5bpm: 161 ms, 239.9bpm: 125 ms. It plays two notes per beat of the tempo shown. Only this clock was measured; patterns, the sequencer, Spice and Dice were not.
+
+LFO Retrig (Utility > Preset > Modulations): Off leaves the LFO running across notes (20 ms after eight notes it stood at -0.69, -1.0, 0.43, -0.35, 0.97, 0.36, 0.45, 1.0); On restarts it from the middle, going up, at every note (0.6, 0.6, 0.6, 0.6, 0.6, 0.6, 0.6, 0.6).
+
+## Cycling envelope
+
+Rise knob (percent: screen, then measured ms to half / to the top): 0%: 0ms, 1 ms / 1 ms, 10%: 12ms, 6 ms / 12 ms, 20%: 79ms, 40 ms / 79 ms, 30%: 273ms, 137 ms / 270 ms, 40%: 653ms, 327 ms / 647 ms, 50%: 1.2s, 638 ms / 1.3 s, 60%: 2.1s, 1.1 s / 2.1 s, 70%: 3.4s, 1.7 s / 3.4 s, 80%: 5.1s, 2.6 s / 5.1 s, 90%: 7.1s, 3.6 s / 7.1 s, 100%: 9.8s, 4.9 s / 9.8 s. The rise is a straight line and the screen time is the whole rise.
+
+Fall knob (percent: screen, then measured ms down to half / to a tenth / to nothing): 0%: 0ms, 1 ms / 1 ms / 1 ms, 10%: 12ms, 2 ms / 7 ms / 11 ms, 20%: 79ms, 13 ms / 41 ms / 68 ms, 30%: 273ms, 45 ms / 141 ms / 232 ms, 40%: 653ms, 106 ms / 337 ms / 555 ms, 50%: 1.2s, 207 ms / 658 ms / 1.1 s, 60%: 2.1s, 346 ms / 1.1 s / 1.8 s, 70%: 3.4s, 554 ms / 1.8 s / 2.9 s, 80%: 5.1s, 833 ms / 2.6 s / 4.4 s, 90%: 7.1s, 1.2 s / 3.7 s / 6.1 s, 100%: 9.8s, 1.6 s / 5.1 s / 8.4 s. The fall is a curve: it drops fast then tails off, half way down in about a sixth of the screen time.
+
+Hold knob in **Env** mode is a sustain level (level still held after 2.5 s with a key down): 0% = 0.0, 25% = 0.251, 50% = 0.502, 75% = 0.745, 100% = 0.996. At 0 it is a one-shot rise and fall.
+
+Hold knob in **Loop** mode is time spent at the top (screen, then the whole cycle with Rise and Fall at 273ms each): 0%: 3ms, cycle 546 ms, 25%: 696ms, cycle 1.2 s, 50%: 2.5s, cycle 3.1 s, 75%: 5.4s, cycle 6.1 s.
+
+Mode button:
+
+- **Env**: moves only while a key is down (no key: stays at 0.0); starts from zero at each note.
+- **Run**: cycles all the time, key or no key (every 546 ms here, which is Rise plus Fall), and a new note does not restart it. It is a second LFO that only goes up from zero.
+- **Loop**: each note restarts it from zero, and it then keeps cycling, key down or released (every 546 ms here).
 
 # Filter (a model, see the caveats at the top)
 
