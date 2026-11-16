@@ -1,0 +1,242 @@
+#!/usr/bin/env python3
+"""freak: play, measure and look up sounds on the emulated MicroFreak.
+
+  freak engines                         oscillator types and what their three knobs are called
+  freak play engine=SawX wave=30 ...    set a patch, play a note, record and measure it
+  freak analyze FILE --note C3          measure any recording
+  freak find --word hollow --engine V.Analog --where "centroid_harm<3"
+  freak match FILE --note C3            measured oscillator settings that sound closest to a recording
+  freak knob cutoff 60                  what the screen shows with a knob at 60 %
+  freak sweep osc|filter|env|panel|all  rebuild the knowledge base (minutes)
+  freak guide                           regenerate kb/GUIDE.md from the measurements
+  freak selftest                        check the emulator still behaves as the tools assume
+
+Patch fields for `play` (knobs are percent of travel, 0-100; filter_amount is -100..100):
+  engine wave timbre shape cutoff resonance filter=lp|bp|hp attack decay sustain filter_amount
+  amp_mod=on|off cyc_mode=env|run|loop cyc_rise cyc_fall cyc_hold cyc_amount glide paraphonic=on|off
+Fields left out keep the plain starting patch. Add init=no to keep whatever the last patch was (same run only).
+"""
+import argparse
+import json
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from freaklab import analyze, engines, kb, patch  # noqa: E402
+from freaklab.client import Lab, note_hz, note_number  # noqa: E402
+
+OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "out")
+
+
+def parse_fields(pairs):
+    fields = {}
+    for pair in pairs:
+        if "=" not in pair:
+            sys.exit(f"'{pair}' is not field=value")
+        key, value = pair.split("=", 1)
+        key = key.strip().lower()
+        if key in ("engine", "filter", "cyc_mode"):
+            fields[key] = value.strip() if key == "engine" else value.strip().lower()
+        elif key in ("amp_mod", "paraphonic"):
+            fields[key] = value.strip().lower() in ("on", "1", "true", "yes")
+        else:
+            fields[key] = float(value)
+    return fields
+
+
+def cmd_engines(args):
+    for name, index, _cc, labels, faithful in engines.ENGINES:
+        note = "" if faithful else "   (not measured: needs Arturia's samples or a microphone, see docs)"
+        print(f"{name:13s} wave={labels[0]:9s} timbre={labels[1]:9s} shape={labels[2]:9s}{note}")
+
+
+def cmd_play(args):
+    fields = parse_fields(args.fields)
+    os.makedirs(OUT, exist_ok=True)
+    base = os.path.join(OUT, args.name)
+    hz = note_hz(args.note)
+    with Lab() as lab:
+        patch.apply(lab, patch.INIT)
+        patch.apply(lab, fields)
+        back = patch.read_back(lab)
+        shown = patch.osc_display(lab)
+        patch.play(lab, args.note, args.hold, args.release, velocity=args.velocity,
+                   wav=base + ".wav", raw_wav=base + ".osc.wav")
+    osc = analyze.analyze_file(base + ".osc.wav", hz, args.hold, oscillator_only=True)
+    out = analyze.analyze_file(base + ".wav", hz, args.hold)
+    result = {"patch": back, "screen": shown, "note": args.note, "note_hz": round(hz, 2),
+              "oscillator": osc, "output": out,
+              "files": {"output": base + ".wav", "oscillator_only": base + ".osc.wav"}}
+    if args.json:
+        print(json.dumps(result))
+        return
+    print("On the panel:")
+    print(f"  Type: {back['engine']}")
+    for knob in ("wave", "timbre", "shape"):
+        s = shown[knob]
+        print(f"  {s['label']}: {s['shown'] if s['shown'] is not None else str(back[knob]) + '%'}")
+    print(f"  Filter: {str(back['filter']).upper()}   Amp Mod: {'on' if back['amp_mod'] else 'off'}"
+          f"   Paraphonic: {'on' if back['paraphonic'] else 'off'}")
+    for knob in ("cutoff", "resonance", "attack", "decay", "sustain", "filter_amount"):
+        print("  " + kb.knob_text(knob, back[knob]))
+    if back["cyc_amount"] > 0.5:
+        for knob in ("cyc_rise", "cyc_fall", "cyc_hold", "cyc_amount"):
+            print("  " + kb.knob_text(knob, back[knob]))
+    if back["glide"] > 0.5:
+        print(f"  Glide: {back['glide']:.0f}% of the knob ({kb.clock(back['glide'])})")
+    print(f"Note {args.note} ({hz:.1f} Hz), held {args.hold} ms")
+    print("Oscillator (exact):  " + analyze.summary(osc))
+    print("After filter + amp (filter is a model): " + analyze.summary(out))
+    env = {k: out.get(k) for k in ("attack_ms", "decay_half_ms", "sustain_ratio", "release_ms") if out.get(k) is not None}
+    print(f"Loudness over time: {env}")
+    print(f"Files: {base}.wav  {base}.osc.wav")
+
+
+def cmd_analyze(args):
+    hz = args.hz or note_hz(args.note)
+    f = analyze.analyze_file(args.file, hz, args.hold)
+    print(json.dumps(f) if args.json else analyze.summary(f))
+    if not args.json:
+        print({k: f.get(k) for k in ("f0_hz", "cents_off", "level_db", "rolloff85_hz", "bands_db", "am_depth",
+                                     "am_rate_hz", "centroid_wobble", "attack_ms", "sustain_ratio", "release_ms")})
+        print("strongest sine waves (ratio to the note, dB):", f.get("peaks"))
+
+
+def _print_hits(rows):
+    for dist, table, p in rows:
+        lead = f"{dist:5.1f} dB  " if dist is not None else ""
+        print(f"{lead}{kb.osc_text(table, p)}")
+        print(f"          {', '.join(p.get('words', [])) or 'plain'} | brightness centre at harmonic {p.get('centroid_harm')}"
+              f" | harmonic share {p.get('harmonic_share')} | odd/even {p.get('odd_even_db')} dB"
+              f" | harmonics 1-8: {' '.join(str(v) for v in p.get('harmonics_db', [])[:8])}")
+
+
+def cmd_find(args):
+    hits = kb.find(args.engine, args.word or (), args.where or (), args.sort, args.limit)
+    if not hits:
+        print("nothing measured fits all of that")
+    _print_hits([(None, t, p) for t, p in hits])
+
+
+def cmd_match(args):
+    hz = args.hz or note_hz(args.note)
+    f = analyze.analyze_file(args.file, hz, args.hold)
+    print("target: " + analyze.summary(f))
+    print("closest measured oscillator settings (average spectrum gap, smaller is closer):")
+    _print_hits(kb.match(f, args.engine, args.limit))
+
+
+def cmd_knob(args):
+    print(kb.knob_text(args.knob, args.percent))
+
+
+def cmd_sweep(args):
+    from freaklab import calibrate, sweep
+    what = args.what
+    if what in ("panel", "all"):
+        table = calibrate.run()
+        os.makedirs(kb.KB, exist_ok=True)
+        json.dump(table, open(calibrate.OUT, "w"), indent=1)
+        print("panel: done")
+    if what in ("osc", "all"):
+        sweep.sweep_osc(args.engine or None, args.jobs)
+    if what in ("filter", "all"):
+        sweep.sweep_filter()
+    if what in ("env", "all"):
+        sweep.sweep_env()
+
+
+def cmd_selftest(args):
+    from freaklab import ocr, params
+    failures = []
+
+    def check(name, ok, detail=""):
+        print(("ok    " if ok else "FAIL  ") + name + (f"  ({detail})" if detail else ""))
+        if not ok:
+            failures.append(name)
+
+    os.makedirs(OUT, exist_ok=True)
+    tmp = os.path.join(OUT, "_selftest.osc.wav")
+    with Lab() as lab:
+        patch.apply(lab, patch.INIT)
+        for knob, (cc, param, _bip) in patch.KNOBS.items():
+            lab.cc(cc, 37)
+            lab.step(80)
+            a = params.read(lab, param)
+            lab.cc(cc, 91)
+            lab.step(80)
+            b = params.read(lab, param)
+            check(f"MIDI CC {cc} drives {knob}", (a, b) == (9546, 23479), f"read {a}, {b}")
+        patch.apply(lab, patch.INIT)
+        for eng in engines.ENGINES:
+            try:
+                patch.set_engine(lab, eng[0])
+                lab.enc("wave", 1)
+                lab.step(150)
+                lab.enc("wave", -1)
+                lab.step(200)
+                title = ocr.read_screen(lab.oled())["title"]
+                check(f"type {eng[0]} selects and the screen says so", title == eng[0], f"screen: {title}")
+            except patch.PatchError as e:
+                check(f"type {eng[0]} selects", False, str(e))
+        patch.apply(lab, {"engine": "BasicWaves", "wave": 50, "timbre": 0, "shape": 0})
+        patch.play(lab, 69, 600, 0, raw_wav=tmp, cv_every=0)
+    f = analyze.analyze_file(tmp, 440.0, 600, oscillator_only=True)
+    check("note 69 is 440 Hz", abs(f.get("cents_off", 99)) < 8, f"{f.get('f0_hz')} Hz")
+    check("a sawtooth measures as one", abs(f["harmonics_db"][1] + 6) < 1 and abs(f["harmonics_db"][2] + 9.5) < 1,
+          str(f["harmonics_db"][:4]))
+    os.remove(tmp)
+    sys.exit(1 if failures else 0)
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="freak", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("engines").set_defaults(fn=cmd_engines)
+    p = sub.add_parser("play")
+    p.add_argument("fields", nargs="*")
+    p.add_argument("--note", default="C3")
+    p.add_argument("--hold", type=float, default=1000)
+    p.add_argument("--release", type=float, default=500)
+    p.add_argument("--velocity", type=int, default=100)
+    p.add_argument("--name", default="last")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(fn=cmd_play)
+    for name, fn in (("analyze", cmd_analyze), ("match", cmd_match)):
+        p = sub.add_parser(name)
+        p.add_argument("file")
+        p.add_argument("--note", default="C3")
+        p.add_argument("--hz", type=float)
+        p.add_argument("--hold", type=float, default=None, help="ms the note was held, if the file includes the release")
+        p.add_argument("--json", action="store_true")
+        if name == "match":
+            p.add_argument("--engine")
+            p.add_argument("--limit", type=int, default=8)
+        p.set_defaults(fn=fn)
+    p = sub.add_parser("find")
+    p.add_argument("--engine")
+    p.add_argument("--word", action="append")
+    p.add_argument("--where", action="append")
+    p.add_argument("--sort")
+    p.add_argument("--limit", type=int, default=12)
+    p.set_defaults(fn=cmd_find)
+    p = sub.add_parser("knob")
+    p.add_argument("knob")
+    p.add_argument("percent", type=float)
+    p.set_defaults(fn=cmd_knob)
+    p = sub.add_parser("sweep")
+    p.add_argument("what", choices=["osc", "filter", "env", "panel", "all"])
+    p.add_argument("--engine", action="append")
+    p.add_argument("--jobs", type=int, default=12)
+    p.set_defaults(fn=cmd_sweep)
+    sub.add_parser("selftest").set_defaults(fn=cmd_selftest)
+    sub.add_parser("guide").set_defaults(fn=lambda a: print(kb.build_guide()))
+    args = ap.parse_args()
+    if args.cmd == "play":
+        note_number(args.note)
+    args.fn(args)
+
+
+if __name__ == "__main__":
+    main()

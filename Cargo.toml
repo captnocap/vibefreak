@@ -5,6 +5,7 @@ members = [
     "crates/vibefreak-web",
     "crates/vibefreak-cli",
     "crates/vibefreak-mcp",
+    "crates/vibefreak-lab",
 ]
 
 [workspace.dependencies]

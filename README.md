@@ -19,6 +19,19 @@ Written in Rust, VibeFreak emulates the entire physical hardware architecture:
 
 ---
 
+## This fork: the lab
+
+This fork adds a measuring layer on top of the emulator, in [`lab/`](lab/README.md): set a patch in panel
+terms, play a note, record the oscillator and the full output, measure the sine waves it is made of, and keep
+the results in a knowledge base ([`lab/kb/GUIDE.md`](lab/kb/GUIDE.md)) that maps a wanted sound to settings on
+the real panel. `lab/freak --help` lists the commands; `.claude/skills/microfreak-sound` tells a coding agent
+how to use them.
+
+It also corrects the emulator's audio rate: the firmware runs its converter at 96 kHz, not 48 kHz (every note
+was an octave flat). The evidence and the two smaller changes are in the lab README.
+
+---
+
 ## Quick Start (Standalone Packaged Firmware Boot)
 
 VibeFreak natively parses Arturia `.mff` update archives directly in memory—no Python scripts, no manual file extraction, and no external dependencies required.
@@ -51,7 +64,7 @@ vibefreak
 ### 3. Web HMI & Audio Output
 Once launched:
 - Open your browser to **http://localhost:8081** to interact with the full front-panel chassis, OLED display, and SWD console.
-- Real-time 48 kHz stereo audio output begins streaming immediately through your system's default audio device.
+- Real-time stereo audio output begins streaming immediately through your system's default audio device (the emulator's 96 kHz stream, halved for 48 kHz devices).
 
 <div align="center">
 <img src="screenshot.png" width="100%"/>

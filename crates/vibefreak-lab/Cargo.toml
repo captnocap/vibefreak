@@ -1,0 +1,14 @@
+[package]
+name = "vibefreak-lab"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+description = "Scriptable measurement front end for the VibeFreak emulator: JSON lines in, audio and control-voltage captures out"
+
+[dependencies]
+vibefreak-core = { path = "../vibefreak-core" }
+serde_json.workspace = true
+
+[[bin]]
+name = "vibefreak-lab"
+path = "src/main.rs"
