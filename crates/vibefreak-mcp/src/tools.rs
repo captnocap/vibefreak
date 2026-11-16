@@ -1056,8 +1056,8 @@ pub async fn handle_call_tool(
                 b as usize
             } else {
                 let ms = args.get("duration_ms").and_then(|v| v.as_u64()).unwrap_or(50);
-                // 1 block = 32 samples / 48000 Hz = 0.6666 ms -> 1.5 blocks per ms
-                ((ms as f64 * 1.5).round() as usize).max(1)
+                // 1 block = 32 samples / 96000 Hz = 0.3333 ms -> 3 blocks per ms
+                ((ms as f64 * 3.0).round() as usize).max(1)
             };
 
             let capture = args.get("capture_screen").and_then(|v| v.as_bool()).unwrap_or(false);
@@ -1066,7 +1066,7 @@ pub async fn handle_call_tool(
                 return CallToolResult::error(e);
             }
 
-            let mut out = format!("Advanced emulation by {blocks} blocks (~{:.1} ms)\n", (blocks as f64) / 1.5);
+            let mut out = format!("Advanced emulation by {blocks} blocks (~{:.1} ms)\n", (blocks as f64) / 3.0);
             if capture {
                 if let Ok(fb) = backend.get_oled().await {
                     out.push('\n');

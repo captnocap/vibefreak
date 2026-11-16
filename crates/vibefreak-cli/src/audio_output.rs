@@ -16,14 +16,15 @@ pub struct AudioSender {
 }
 
 impl AudioSender {
-    /// Push raw 48 kHz stereo 16-bit signed PCM bytes (e.g. from step_audio_block_quantum)
+    /// Push raw stereo 16-bit signed PCM bytes at the emulator's rate (e.g. from step_audio_block_quantum)
     pub fn push_pcm_chunk(&mut self, pcm_bytes: &[u8]) {
         let num_frames = pcm_bytes.len() / 4;
         if num_frames == 0 {
             return;
         }
 
-        if self.target_sample_rate == 48000 {
+        let source_rate = vibefreak_core::AUDIO_SAMPLE_RATE;
+        if self.target_sample_rate == source_rate {
             // Direct 1:1 transfer
             for chunk in pcm_bytes.chunks_exact(4) {
                 let l = i16::from_le_bytes([chunk[0], chunk[1]]) as f32 / 32768.0;
@@ -31,10 +32,18 @@ impl AudioSender {
                 let _ = self.producer.try_push(l);
                 let _ = self.producer.try_push(r);
             }
+        } else if self.target_sample_rate * 2 == source_rate {
+            // Exactly half rate (96 kHz -> 48 kHz device): average each pair of frames
+            for pair in pcm_bytes.chunks_exact(8) {
+                let l = (i16::from_le_bytes([pair[0], pair[1]]) as f32 + i16::from_le_bytes([pair[4], pair[5]]) as f32) / 65536.0;
+                let r = (i16::from_le_bytes([pair[2], pair[3]]) as f32 + i16::from_le_bytes([pair[6], pair[7]]) as f32) / 65536.0;
+                let _ = self.producer.try_push(l);
+                let _ = self.producer.try_push(r);
+            }
         } else {
             // Linear interpolation to target sample rate
-            let ratio = 48000.0 / self.target_sample_rate as f64;
-            let out_frames = ((num_frames as f64) * (self.target_sample_rate as f64) / 48000.0).round() as usize;
+            let ratio = source_rate as f64 / self.target_sample_rate as f64;
+            let out_frames = ((num_frames as f64) * (self.target_sample_rate as f64) / source_rate as f64).round() as usize;
             for i in 0..out_frames {
                 let src_pos = i as f64 * ratio;
                 let idx = src_pos.floor() as usize;
@@ -78,7 +87,7 @@ pub fn start_audio_output() -> Result<(AudioStream, AudioSender), Box<dyn std::e
     let device_name = device.name().unwrap_or_else(|_| "Unknown".into());
     log::info!("Connecting native audio output to device: {}", device_name);
 
-    // Try opening 48 kHz stereo (standard MicroFreak physical DAC rate)
+    // Try opening a 48 kHz stereo device (the emulator's 96 kHz stream is halved to fit)
     let desired_config = cpal::StreamConfig {
         channels: 2,
         sample_rate: cpal::SampleRate(48000),

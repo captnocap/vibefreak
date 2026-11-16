@@ -394,7 +394,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 } else {
                     // Fallback timer pacing when audio output is disabled
                     let wall_clock_elapsed = engine_start.elapsed();
-                    let virtual_audio_elapsed = Duration::from_micros((total_samples_generated * 1_000_000) / 48_000);
+                    let virtual_audio_elapsed = Duration::from_micros((total_samples_generated * 1_000_000) / vibefreak_core::AUDIO_SAMPLE_RATE as u64);
                     if wall_clock_elapsed > virtual_audio_elapsed + Duration::from_millis(500) {
                         engine_start = Instant::now();
                         total_samples_generated = 0;

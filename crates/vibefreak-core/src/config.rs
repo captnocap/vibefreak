@@ -319,7 +319,16 @@ pub struct RearPanelState {
 }
 
 // Audio Parameters
-pub const AUDIO_SAMPLE_RATE: u32 = 48000;
+//
+// The stream the firmware hands to the codec is 96 kHz, not 48 kHz. Three things agree on it:
+//   * the firmware writes 0x6A to TLV320AIC3104 register 7: 48 kHz reference with the
+//     ADC and DAC dual-rate bits set, which makes the converters run at twice the reference;
+//   * read as 48 kHz every note is exactly one octave flat (MIDI note 69 gives 220 Hz);
+//   * the attack times the firmware prints on its own display (181 ms, 714 ms, 2.2 s) match
+//     the envelope it outputs only if one 32-frame block lasts 333 µs.
+pub const AUDIO_SAMPLE_RATE: u32 = 96000;
+/// CPU cycles in one audio block: 180 MHz * 32 frames / 96 kHz.
+pub const CPU_CYCLES_PER_AUDIO_BLOCK: u32 = 60_000;
 pub const AUDIO_BLOCK_FRAMES: usize = 32;
 pub const AUDIO_CHANNELS: usize = 2;
 pub const AUDIO_BLOCK_BYTES: usize = AUDIO_BLOCK_FRAMES * AUDIO_CHANNELS * 2; // 128 bytes

@@ -2247,7 +2247,7 @@ impl VibeFreakEmulator {
 
     /// Single-threaded deterministic 2-slice micro-quantum co-scheduler (Section 17.3)
     /// Runs STM32F446 and the 3x pure-Rust STM32F0 coprocessors in lockstep virtual time
-    /// for one physical 32-sample audio block (32 / 48 kHz = 666.67 µs).
+    /// for one physical 32-sample audio block (32 / 96 kHz = 333.33 µs).
     pub fn step_audio_block_quantum(&mut self) -> [u8; AUDIO_BLOCK_BYTES] {
         if !self.is_booted {
             return [0u8; AUDIO_BLOCK_BYTES];
@@ -2342,8 +2342,8 @@ impl VibeFreakEmulator {
         self.service_usart2_rx();
         self.service_usart3_rx();
 
-        // Advance hardware timers by 120,000 cycles (32 samples @ 48 kHz = 666.67 µs)
-        self.uc.get_data_mut().mmio.timers.step_cycles(120_000);
+        // Advance hardware timers by one audio block of CPU time (32 samples @ 96 kHz = 333.33 µs)
+        self.uc.get_data_mut().mmio.timers.step_cycles(CPU_CYCLES_PER_AUDIO_BLOCK);
 
         let timer_irq_active = self.uc.get_data().mmio.timers.is_tim5_irq_active()
             || self.uc.get_data().mmio.timers.is_tim8_cc_irq_active()
@@ -2426,7 +2426,7 @@ impl VibeFreakEmulator {
             self.perf_usart += t.elapsed();
 
             // 5. Advance SysTick timer naturally at 10 kHz (every 18,000 cycles at 180 MHz = 100 µs)
-            self.systick_cycle_accum += 120_000;
+            self.systick_cycle_accum += CPU_CYCLES_PER_AUDIO_BLOCK;
             while self.systick_cycle_accum >= 18_000 {
                 self.systick_cycle_accum -= 18_000;
                 let t = std::time::Instant::now();
@@ -2442,7 +2442,7 @@ impl VibeFreakEmulator {
             self.service_usart2_rx();
             self.service_usart3_rx();
 
-            self.systick_cycle_accum += 120_000;
+            self.systick_cycle_accum += CPU_CYCLES_PER_AUDIO_BLOCK;
             while self.systick_cycle_accum >= 18_000 {
                 self.systick_cycle_accum -= 18_000;
                 self.dispatch_systick();

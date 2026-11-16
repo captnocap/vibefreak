@@ -6,6 +6,11 @@
 
 use crate::config::SemFilterMode;
 
+/// Cutoff shown by the firmware with the knob fully down.
+pub const CUTOFF_MIN_HZ: f32 = 16.0;
+/// Octaves between the knob fully down and fully up, from the firmware's display (16 Hz .. 26.8 kHz).
+pub const CUTOFF_OCTAVES: f32 = 10.71;
+
 #[derive(Debug, Clone, Copy)]
 pub struct SvfChannel {
     pub s1: f32,
@@ -101,31 +106,45 @@ impl SemFilter {
         self.mode
     }
 
-    /// Sets the target cutoff frequency in Hz [20.0 .. 20480.0].
+    /// Cutoff frequency (Hz) the model is currently heading for.
+    #[inline]
+    pub fn get_cutoff_hz(&self) -> f32 {
+        self.target_cutoff_hz
+    }
+
+    /// Resonance Q the model is currently heading for.
+    #[inline]
+    pub fn get_resonance_q(&self) -> f32 {
+        self.target_resonance_q
+    }
+
+    /// Sets the target cutoff frequency in Hz, limited to what the filter maths can do at this sample rate.
     #[inline]
     pub fn set_cutoff_hz(&mut self, fc: f32) {
-        let clamped = fc.clamp(20.0, (self.sample_rate * 0.49).min(20480.0));
+        let clamped = fc.clamp(CUTOFF_MIN_HZ, self.sample_rate * 0.45);
         self.target_cutoff_hz = clamped;
         if self.channels[0].s1 == 0.0 && self.channels[0].s2 == 0.0 && self.channels[1].s1 == 0.0 && self.channels[1].s2 == 0.0 {
             self.cutoff_hz = clamped;
         }
     }
 
-    /// Maps a 12-bit raw ADC/potentiometer reading [0..4095] exponentially to [20.0 .. 20480.0 Hz].
+    /// Maps a 12-bit raw ADC/potentiometer reading [0..4095] to the cutoff the firmware displays for it.
     #[inline]
     pub fn set_cutoff_raw_12b(&mut self, raw_12b: u16) {
         let norm = (raw_12b.min(4095) as f32) / 4095.0;
-        // 20 Hz * 2^(10.0 * norm) covers 20 Hz to 20,480 Hz (10 octaves, ~1V/octave tracking)
-        let fc = 20.0 * 2.0f32.powf(9.965784 * norm);
-        self.set_cutoff_hz(fc);
+        self.set_cutoff_hz(CUTOFF_MIN_HZ * 2.0f32.powf(CUTOFF_OCTAVES * norm));
     }
 
-    /// Maps a 16-bit raw Dual-PWM DAC output [0..65535] from TIM3 CCR3/CCR4 exponentially to [20.0 .. 20480.0 Hz].
+    /// Maps the 16-bit cutoff control value the firmware outputs (TIM3 CCR3/CCR4) to Hz.
+    ///
+    /// The scale is the firmware's own: with the Cutoff knob at 0, 25, 50, 75 and 100 percent
+    /// its display reads 16 Hz, 106 Hz, 675 Hz, 4.3 kHz and 26.8 kHz, which is 16 Hz doubling
+    /// 10.71 times across the range. Whether the analog board follows that scale exactly is
+    /// not something an emulator can know; it is the manufacturer's stated calibration.
     #[inline]
     pub fn set_cutoff_raw_16b(&mut self, raw_16b: u16) {
         let norm = (raw_16b as f32) / 65535.0;
-        let fc = 20.0 * 2.0f32.powf(9.965784 * norm);
-        self.set_cutoff_hz(fc);
+        self.set_cutoff_hz(CUTOFF_MIN_HZ * 2.0f32.powf(CUTOFF_OCTAVES * norm));
     }
 
     /// Sets the target resonance Q factor [0.5 .. 25.0].

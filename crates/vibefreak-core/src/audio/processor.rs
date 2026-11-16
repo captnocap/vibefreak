@@ -13,6 +13,9 @@ pub struct AudioProcessor {
     pub filter: SemFilter,
     pub vca: AnalogVca,
     float_buffer: [f32; AUDIO_BLOCK_FRAMES * AUDIO_CHANNELS],
+    /// Copy of the most recent block exactly as the firmware wrote it to the DAC,
+    /// before the modeled analog filter and VCA. Measurement tap for the lab tools.
+    pub last_raw_block: [u8; AUDIO_BLOCK_BYTES],
 }
 
 impl Default for AudioProcessor {
@@ -27,6 +30,7 @@ impl AudioProcessor {
             filter: SemFilter::new(sample_rate),
             vca: AnalogVca::new(1.0, sample_rate),
             float_buffer: [0.0; AUDIO_BLOCK_FRAMES * AUDIO_CHANNELS],
+            last_raw_block: [0u8; AUDIO_BLOCK_BYTES],
         }
     }
 
@@ -67,6 +71,8 @@ impl AudioProcessor {
 
     /// Processes an authentic 16-frame stereo audio block through the analog SEM filter and VCA.
     pub fn process_block(&mut self, raw_block: &mut [u8; AUDIO_BLOCK_BYTES]) {
+        self.last_raw_block = *raw_block;
+
         // 1. Decode raw 16-bit signed little-endian PCM into normalized floating-point samples [-1.0 .. 1.0]
         for (i, chunk) in raw_block.chunks_exact(2).enumerate() {
             let sample_i16 = i16::from_le_bytes([chunk[0], chunk[1]]);
